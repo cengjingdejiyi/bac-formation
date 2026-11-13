@@ -22,17 +22,26 @@ class FormationCommEnv:
 | obs | [N, 4 + 2*n_obs] | float32 | 自身速度(2) + 编队中心相对位置(2) + 最近 n_obs 个邻居相对位置（按距离升序，不足补零） |
 | obs_mask | [N, n_obs] | bool | 邻居槽位是否有效 |
 | state | [D_state] | float32 | 全体位置与速度 + 编队中心，仅供 Critic |
-| comm_mask | [N, N] | bool | `comm_mask[i, j]`：i 是接收者、j 是发送者，j 在 i 的 R_comm 内且属最近 K 个；对角为 False；不含门控与丢包 |
+| comm_mask | [N, N] | bool | j 在 i 的 R_comm 内且属最近 K 个；对角为 False；不含门控与丢包 |
 | reward | [N] | float32 | 团队项 r_t（各机相同）；通信代价不在环境内计算 |
 | done | 标量 | bool | 时限到达，或完成成立且配置提前结束 |
 | info | dict | — | formation_err, collisions, success, hold_steps, channel |
 
 约定：
 - 环境只负责物理、观测、团队奖励；门控、消息、信道噪声在模型侧，环境不感知消息内容。
-- `reward = -(formation_err + λ_c·collisions)`；槽位匹配用 `scipy.optimize.linear_sum_assignment`，无 scipy 时退化为贪心。
+- `reward = -(formation_err + λ_c·collisions)`；`collisions = sum_{i<j} 1[distance(i,j)<safe_dist]` 是不安全机对数，**不是**“本步存在碰撞”的 0/1 值。槽位匹配用 `scipy.optimize.linear_sum_assignment`，无 scipy 时退化为贪心。
 - 信道参数由环境每回合 reset 时采样（训练从区间采，评估取固定值），经 `info["channel"]` 传给模型。
 - `vec_env` 把 B 个环境堆成 `[B, N, ...]`，回合结束自动 reset，回合级统计留在 `info`。
-- `info["channel"]` 在 `vec_env` 中按环境堆成 `[B]`：并行环境中各环境每回合的信道概率本就不同，训练入口必须原样传给模型，不得取均值；模型侧（`channel.py` / 通信模块）对 `drop_p`、`flip_p` 同时支持标量与 `[B]`。
+
+### B 环境实现补充（2026-11-13）
+
+- `backend=mpe2` 使用 `mpe2.simple_formation_v1.parallel_env` 的真实物理；`auto` 仅在未安装 `mpe2` 时告警退回 mock，安装损坏或接口不匹配须报错。mock 仅用于契约冒烟。
+- 原生观测是 `[速度(2), 绝对位置(2), 地标相对位置(2)]`；包装层从 world 按固定 agent 顺序读取位置/速度，统一组装上述局部观测，不向 Actor 泄漏绝对位置。
+- 中心取唯一 landmark；原生奖励使用动态朝向和距离裁剪，与本契约不同，故统一重算固定 `heading`、可配 `formation_radius` 的槽位误差与安全距离惩罚。`max_speed` 限制速度向量的模长。
+- 完成要求所有匹配距离不超过 `success_dist` 且连续保持 `success_hold` 步；`info.success` 表示当前满足保持条件。回合统计 `ep.success` 记录本回合是否曾完成。
+- 自动 reset 后 obs/state/comm_mask/channel 来自新回合，`reward`、`done`、`ep` 保留刚结束的转移；`info_raw[k].info["terminal_step"]` 保留终止帧（含终止指标和信道），便于评测。后续回合不重新播种，整段运行可复现且初始状态不重复。
+- 单环境和并行环境提供 `close()` 及上下文管理器以释放 MPE2 资源。`scene=spread` 仍是选做扩展，本次不实现；须显式报错，避免误把编队结果当作覆盖实验。
+- 标定脚本和报告见 `scripts/calibrate_env.py`、`docs/env-calibration.md`。正式编队配置统一为 `formation.yaml`（R_obs=R_comm=0.8）；旧半径只保留在明确标记的 `formation_legacy.yaml` 对照配置中。
 
 ## 3. 模型接口（负责人 C；通信模块 A、D）
 
@@ -68,11 +77,9 @@ class Critic(nn.Module):
 
 信道：`channel.py` 提供 `sample(recv_mask, L, params)` 与 `apply(msgs, recv_mask, noise)`。二值消息同时做整条丢弃和比特翻转；连续消息（IC3Net/TarMAC）只做整条丢弃。
 
-信道边约定（与环境、注意力共用同一条边，A 验收 issue #2 后冻结）：
-- `comm_mask[b, i, j]` / `recv_mask[b, i, j]`：接收者 i 在前、发送者 j 在后，`True` 表示 i 能收到 j。
-- `apply_noise` 输出 `edge[b, i, j] = msgs[b, j]`：第 3 维（发送者轴）放的是发送者 j 的消息，不是接收者自己的消息。
-- 注意力只在「物理可达 ∧ 发送者发言 ∧ 消息未丢弃」的边上归一化；整行没有任何有效边时 `attn` 与上下文 `c` 均为 0（`w_v` 的偏置不得漏成上下文）。
-- 发送侧计费仍为 `gate × L`：丢包不退款，也不按接收者数量重复计费。
+- 所有边张量统一为接收者在前、发送者在后：`comm_mask[b,i,j]` 表示 i 收 j，`edge[b,i,j,:]` 是 j 发给 i 的消息，`noise.drop[b,i,j]` 与 `noise.flip[b,i,j,:]` 作用于同一条 j→i 边。NumPy 与 torch 实现必须一致，不能只在聚合端转置已经掩码/加噪的边。
+- 只有半径/容量掩码允许、发送者 gate=1 且未丢包的边参与归一化。无有效邻居时权重与通信上下文均为 0；注意力不能越过输入掩码。
+- `channel.drop_p/flip_p` 支持标量或逐并行环境 `[B]` 参数；不得把不同环境的信道概率取均值后使用。PPO 更新复用存储的噪声。
 
 ## 4. 训练接口（负责人 C）
 
@@ -92,6 +99,9 @@ class Critic(nn.Module):
 - 训练奖励在缓存中合成：`r_i = reward_team - β·bits_i`，β 取采样时的值。
 - 每轮迭代顺序：采样 → 合成奖励 → GAE → PPO 多轮小批量更新 → 用本轮比特均值更新 β → 记录日志 → 定期评估与保存。
 - 统一入口：`python -m bacmarl.runners.train env=formation algo=bac env.n_agents=6 algo.msg_bits=4 seed=0`
+- 缓存第 t 项是 `(obs_t, h_prev_t, action_t, gate_t, reward_{t+1}, done_{t+1})`：先从当前观测决策，再 step，最后把这次 step 的 reward/done 与**动作前**的观测一起写入缓存。终止帧只用于诊断，不能替代动作前的观测。
+- rollout 段之间保留环境状态与循环隐状态；仅真正 done 的环境自动 reset，并在下一动作前清零对应隐状态。`done[t]` 同时切断 GAE 自举与跨回合优势传播；未终止段末使用最新 next state 的 value 自举。
+- β 用 `bits.mean()`（所有 T、B、N 的均值）更新；一次广播不按接收边数重复收费，丢包也不退款。
 
 ## 5. 配置规范（负责人 C；数值由 B 标定后填写）
 
@@ -116,6 +126,7 @@ class Critic(nn.Module):
 
 - 所有方法共用 `train.*`，只允许改 `algo.*`。
 - 任何默认值改动须在群里同步并写进提交说明。
+- 本次修复统一正式参数：`backend=mpe2, obs_radius=comm_radius=0.8, collision_coef=1.0`；后者按每个不安全机对计价。`formation_calibrated` 仅是正式配置的兼容别名，`formation_legacy` 仅供旧半径对照，不参与默认正式实验。几何与可行性证据不等于惩罚系数最优或训练已收敛，报告数值以此配置表和 `docs/env-calibration.md` 为准。
 
 ## 6. 日志与结果规范（负责人 E）
 

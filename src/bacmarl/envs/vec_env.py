@@ -1,9 +1,13 @@
 """并行环境封装：把 B 个环境堆成 [B, N, ...]（负责人 B）。"""
+
 from __future__ import annotations
+
+from dataclasses import replace
+from typing import Any
 
 import numpy as np
 
-from .formation_comm import EnvConfig, FormationCommEnv
+from .formation_comm import EnvConfig, EnvStep, FormationCommEnv
 
 
 class VecFormationEnv:
@@ -11,10 +15,21 @@ class VecFormationEnv:
 
     def __init__(self, n_envs: int, cfg: EnvConfig, seed: int = 0):
         self.n_envs = int(n_envs)
+        if self.n_envs < 1:
+            raise ValueError("n_envs must be positive")
         self.cfg = cfg
-        self.envs = [FormationCommEnv(cfg) for _ in range(self.n_envs)]
+        self.envs = []
+        try:
+            for _ in range(self.n_envs):
+                self.envs.append(FormationCommEnv(cfg))
+        except Exception:
+            self.close()
+            raise
         self._seeds = [seed + 1000 * k for k in range(self.n_envs)]
-        self._eps_stats = [{"ret": 0.0, "len": 0, "coll": 0, "success": False} for _ in range(self.n_envs)]
+        self._eps_stats = [
+            {"ret": 0.0, "len": 0, "coll": 0, "success": False}
+            for _ in range(self.n_envs)
+        ]
 
     @property
     def n_agents(self) -> int:
@@ -29,14 +44,22 @@ class VecFormationEnv:
         return self.envs[0].state_dim
 
     def reset(self) -> dict:
+        """复现初始批次，obs [B,N,D]；回合内自动 reset 不重新播种。"""
         steps = [e.reset(seed=s) for e, s in zip(self.envs, self._seeds)]
         for st in self._eps_stats:
             st.update({"ret": 0.0, "len": 0, "coll": 0, "success": False})
         return self._stack(steps)
 
     def step(self, actions: np.ndarray) -> dict:
-        assert actions.shape == (self.n_envs, self.n_agents), actions.shape
-        steps, done = [], []
+        """actions [B,N]；终止转移的奖励与统计和新回合观测一起返回。"""
+        actions = np.asarray(actions)
+        if actions.shape != (self.n_envs, self.n_agents):
+            raise ValueError(f"expected actions [{self.n_envs}, {self.n_agents}]")
+        if not np.issubdtype(actions.dtype, np.integer) or np.any(
+            (actions < 0) | (actions > 4)
+        ):
+            raise ValueError("actions must be integers in 0..4")
+        steps = []
         for k, env in enumerate(self.envs):
             st = env.step(actions[k])
             cur = self._eps_stats[k]
@@ -44,29 +67,48 @@ class VecFormationEnv:
             cur["len"] += 1
             cur["coll"] += st.info["collisions"]
             cur["success"] = cur["success"] or st.info["success"]
-            done.append(st.done)
             if st.done:
-                st.info["ep"] = {"ret": cur["ret"], "len": cur["len"],
-                                 "collisions": cur["coll"], "success": cur["success"]}
-                st = env.reset(seed=self._seeds[k])  # 自动 reset
+                st.info["ep"] = {
+                    "ret": cur["ret"],
+                    "len": cur["len"],
+                    "collisions": cur["coll"],
+                    "success": cur["success"],
+                    "formation_err": st.info["formation_err"],
+                }
+                terminal = st
+                initial = env.reset()  # 延续 RNG，保持复现且不重复同一个回合。
+                initial.info["ep"] = terminal.info["ep"]
+                initial.info["terminal_step"] = terminal
+                st = replace(initial, reward=terminal.reward, done=True)
                 self._eps_stats[k] = {"ret": 0.0, "len": 0, "coll": 0, "success": False}
             else:
                 st.info["ep"] = None
             steps.append(st)
-        out = self._stack(steps)
-        out["done"] = np.asarray(done, dtype=bool)
-        return out
+        return self._stack(steps)
 
-    def _stack(self, steps) -> dict:
+    def close(self) -> None:
+        """关闭全部 B 个环境。"""
+        for env in self.envs:
+            env.close()
+
+    def __enter__(self) -> VecFormationEnv:
+        return self
+
+    def __exit__(self, *_exc: Any) -> None:
+        self.close()
+
+    def _stack(self, steps: list[EnvStep]) -> dict:
         return {
             "obs": np.stack([s.obs for s in steps], axis=0),
             "obs_mask": np.stack([s.obs_mask for s in steps], axis=0),
             "state": np.stack([s.state for s in steps], axis=0),
             "comm_mask": np.stack([s.comm_mask for s in steps], axis=0),
             "reward": np.stack([s.reward for s in steps], axis=0),
-            "channel": {k: np.asarray([s.info["channel"][k] for s in steps], dtype=np.float32)
-                        for k in steps[0].info["channel"]},
-            "done": np.zeros(len(steps), dtype=bool),
+            "channel": {
+                k: np.asarray([s.info["channel"][k] for s in steps], dtype=np.float32)
+                for k in steps[0].info["channel"]
+            },
+            "done": np.asarray([s.done for s in steps], dtype=bool),
             "ep": [s.info.get("ep") for s in steps],
             "info_raw": steps,
         }

@@ -2,6 +2,7 @@
 
 四种通信方式（none / ic3net / tarmac / bac）都实现这一接口，Actor 只认它。
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -12,10 +13,10 @@ import torch.nn as nn
 
 @dataclass
 class CommOut:
-    c: torch.Tensor          # [B, N, C] 聚合后的通信上下文
-    bits: torch.Tensor       # [B, N]    本步实际发送比特数
-    attn: torch.Tensor       # [B, N, N] 注意力/可见权重，attn[b,i,j] 为接收者 i 对发送者 j 的权重
-    noise: object = None     # ChannelNoise，供 PPO 更新时复用
+    c: torch.Tensor  # [B, N, C] 聚合后的通信上下文
+    bits: torch.Tensor  # [B, N]    本步实际发送比特数
+    attn: torch.Tensor  # [B, N, N] 注意力/可见权重（无注意力时退化为掩码）
+    noise: object = None  # ChannelNoise，供 PPO 更新时复用
 
 
 class CommModule(nn.Module):
@@ -24,7 +25,9 @@ class CommModule(nn.Module):
     has_gate: bool = False
     bits_per_msg: int = 0
 
-    def __init__(self, hidden: int, msg_dim: int = 8, msg_bits: int = 4, recv_k: int = 3):
+    def __init__(
+        self, hidden: int, msg_dim: int = 8, msg_bits: int = 4, recv_k: int = 3
+    ):
         super().__init__()
         self.hidden = hidden
         self.msg_dim = msg_dim
@@ -38,8 +41,12 @@ class CommModule(nn.Module):
     # 供子类复用的工具
     @staticmethod
     def _masked_softmax(score, mask, dim=-1):
-        score = score.masked_fill(~mask, -1e9)
-        return torch.softmax(score, dim=dim)
+        """有效边归一化；全掩码行返回 0，避免均匀权重或 NaN。"""
+        score = score.masked_fill(~mask, torch.finfo(score.dtype).min)
+        weight = torch.softmax(score, dim=dim) * mask.to(score.dtype)
+        return weight / weight.sum(dim=dim, keepdim=True).clamp_min(
+            torch.finfo(score.dtype).tiny
+        )
 
 
 COMM_REGISTRY = {}

@@ -16,16 +16,21 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: 安装基础依赖
-        run: |
-          python -m pip install -U pip
-          python -m pip install numpy pyyaml pytest
-
       - name: 安装 CPU 版 torch
         run: python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: 安装项目与真实环境依赖（同时验证可编辑安装）
+        run: python -m pip install -e ".[dev,env]"
 
       - name: 契约冒烟（不依赖 mpe2，走 mock 后端）
         run: python scripts/smoke.py
 
-      - name: 形状与缓存测试
+      - name: 形状、通信语义与转移缓存测试
         run: python -m pytest -q tests
+
+      - name: 标准模块入口训练冒烟（真实 MPE2，跨 rollout 与回合边界）
+        run: >-
+          python -m bacmarl.runners.train env=formation algo=bac
+          train.total_env_steps=32 train.n_envs=2 train.rollout_len=4
+          train.ppo_epochs=1 train.minibatch=8 train.hidden=16
+          env.max_steps=6 experiment.name=ci seed=0

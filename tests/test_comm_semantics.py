@@ -1,200 +1,206 @@
-"""A 验收回归：BAC 通信语义（边方向 / 空邻居 / 丢包归一化 / 逐环境信道）。
-
-对应 issue #2 的 3 项 P1 与 1 项 P2，固定为仓库回归测试；无 torch 时整体跳过。
-
-边约定：``comm_mask[b, i, j]`` 中 i 是接收者、j 是发送者，``edge[b, i, j] = msgs[b, j]``。
-"""
-import sys
-from pathlib import Path
+"""用可解释的消息/有向边验证信息流，而不只验证张量形状。"""
 
 import numpy as np
 import pytest
+import torch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
-
-torch = pytest.importorskip('torch')
-
-from bacmarl.algos.dual import BetaDual  # noqa: E402
-from bacmarl.comm.bac import CommBAC  # noqa: E402
-from bacmarl.comm.channel import ChannelNoise, apply_noise, sample_noise  # noqa: E402
-from bacmarl.comm.np_channel import apply_noise_np, sample_noise_np  # noqa: E402
-from bacmarl.models.actor import Actor  # noqa: E402
+from bacmarl.algos.dual import BetaDual
+from bacmarl.comm.base import build_comm
+from bacmarl.comm.channel import ChannelNoise, apply_noise, sample_noise
+from bacmarl.comm.np_channel import apply_noise_np, sample_noise_np
+from bacmarl.envs import EnvConfig, FormationCommEnv
 
 
-def simple_comm(bias: float = 0.0) -> CommBAC:
-    """hidden=1、msg_bits=1 的定参 BAC：消息 = sign(h)，上下文 = 有效发送者消息。"""
-    comm = CommBAC(hidden=1, msg_bits=1)
+def module(name):
+    comm = build_comm(name, 4, {"msg_dim": 4, "msg_bits": 2})
     with torch.no_grad():
-        comm.w_msg.weight.fill_(1.0)
+        comm.w_msg.weight.zero_()
         comm.w_msg.bias.zero_()
-        comm.w_q.weight.zero_()
-        comm.w_q.bias.zero_()
-        comm.w_k.weight.zero_()
-        comm.w_k.bias.zero_()
-        comm.w_v.weight.fill_(1.0)
-        comm.w_v.bias.fill_(bias)
+        if name == "bac":
+            comm.w_msg.weight[:, 0] = 1.0
+        else:
+            comm.w_msg.weight.copy_(torch.eye(4))
+        if name == "ic3net":
+            comm.w_out.weight.copy_(torch.eye(4))
+            comm.w_out.bias.fill_(0.7)
+        else:
+            comm.w_q.weight.zero_()
+            comm.w_q.bias.zero_()
+            comm.w_v.weight.zero_()
+            comm.w_v.weight[: comm.w_v.in_features, :].copy_(
+                torch.eye(comm.w_v.in_features)
+            )
+            comm.w_v.bias.fill_(0.5)
     return comm
 
 
-def zero_noise(mask, length: int = 1) -> ChannelNoise:
-    return ChannelNoise(torch.zeros_like(mask),
-                        torch.zeros((*mask.shape, length), dtype=torch.bool))
-
-
-# ---- P1-1：接收者读发送者的消息（torch / numpy 两条信道实现）----------
-def test_torch_edge_contains_sender_message():
-    msgs = torch.tensor([[[-1.0], [1.0]]])                 # 发送者 0 = -1，发送者 1 = +1
-    mask = torch.tensor([[[False, True], [False, False]]])  # 接收者 0 收发送者 1
-    edge = apply_noise(msgs, mask, zero_noise(mask))
-    assert edge[0, 0, 1, 0].item() == 1.0
-    assert edge[0, 1, 0, 0].item() == 0.0                   # 无物理边 = 0
-
-
-def test_numpy_edge_contains_sender_message():
-    msgs = np.array([[[-1.0], [1.0]]], dtype=np.float32)
-    mask = np.array([[[False, True], [False, False]]])
-    noise = {"drop": np.zeros_like(mask), "flip": np.zeros((*mask.shape, 1), dtype=bool)}
-    edge = apply_noise_np(msgs, mask, noise)
-    assert edge[0, 0, 1, 0] == 1.0
-    assert edge[0, 1, 0, 0] == 0.0
-
-
-def test_bac_receiver_responds_to_sender_message():
-    comm = simple_comm()
-    mask = torch.tensor([[[False, True], [False, False]]])
-    h = torch.tensor([[[-1.0], [1.0]]])
-    out = comm(h, mask, torch.ones(1, 2), {}, noise=zero_noise(mask))
-    assert out.c[0, 0, 0].item() == 1.0
-    assert out.attn[0, 0, 1].item() == 1.0
-
-
-def test_gate_uses_sender_axis():
-    """门控按发送者 j 生效：只有 j=1 发言时，i=0 只看到 j=1 的边。"""
-    comm = simple_comm()
+def inputs():
+    h = torch.tensor(
+        [[[0.3, 0.2, 0.1, 0.4], [-1.0, -0.5, 0.6, 0.7], [0.5, 1.0, -0.2, 0.1]]]
+    )
     mask = torch.zeros(1, 3, 3, dtype=torch.bool)
-    mask[0, 0, 1:] = True                                   # 0 收 1、2
-    gate = torch.tensor([[0.0, 1.0, 0.0]])
-    out = comm(torch.ones(1, 3, 1), mask, gate, {}, noise=zero_noise(mask))
-    assert out.attn[0, 0, 1].item() == 1.0
-    assert out.attn[0, 0, 2].item() == 0.0
-    assert out.c[0, 0, 0].item() == 1.0
+    mask[0, 0, 1] = True  # 只有接收者 0 能收到发送者 1，反向边不存在。
+    return h, mask, torch.ones(1, 3)
 
 
-# ---- P1-2：无消息时上下文和注意力都为零 --------------------------------
-@pytest.mark.parametrize("case", ["no_neighbors", "all_silent", "all_dropped"])
-def test_no_received_messages_means_zero_context_and_attention(case):
-    comm = simple_comm(bias=2.0)                            # 偏置非零，仍应为全零
-    mask = ~torch.eye(3, dtype=torch.bool)[None]
-    gate = torch.ones(1, 3)
-    noise = zero_noise(mask)
-    if case == "no_neighbors":
-        mask = torch.zeros_like(mask)
-    elif case == "all_silent":
-        gate.zero_()
+@pytest.mark.parametrize("name", ["bac", "ic3net", "tarmac"])
+def test_receiver_gets_the_senders_message_on_a_directed_edge(name):
+    comm = module(name)
+    h, mask, gate = inputs()
+    out = comm(h, mask, gate, {})
+    if name == "bac":
+        expected = comm.w_v(comm.encode_msg(h[:, 1]))
+    elif name == "ic3net":
+        expected = comm.w_out(comm.w_msg(h[:, 1]))
     else:
-        noise.drop.copy_(mask)
-    out = comm(torch.ones(1, 3, 1), mask, gate, {}, noise=noise)
-    assert torch.count_nonzero(out.c).item() == 0, f"{case}: context={out.c.tolist()}"
-    assert torch.count_nonzero(out.attn).item() == 0, f"{case}: attention={out.attn.tolist()}"
+        expected = comm.w_v(comm.w_msg(h[:, 1]))
+    torch.testing.assert_close(out.c[:, 0], expected)
+    torch.testing.assert_close(out.c[:, 1:], torch.zeros_like(out.c[:, 1:]))
+    assert out.attn[0, 0, 1] == 1
+    assert torch.count_nonzero(out.attn) == 1
 
 
-# ---- P1-3：丢包边不参与注意力归一化 ------------------------------------
-def test_dropped_edge_is_excluded_from_attention_normalization():
-    comm = simple_comm()
-    mask = torch.zeros(1, 3, 3, dtype=torch.bool)
-    mask[0, 0, 1:] = True
-    noise = zero_noise(mask)
-    noise.drop[0, 0, 1] = True
-    out = comm(torch.ones(1, 3, 1), mask, torch.ones(1, 3), {}, noise=noise)
-    assert out.attn[0, 0, 1].item() == 0.0
-    assert out.attn[0, 0, 2].item() == 1.0
-    assert out.attn[0, 0].sum().item() == 1.0
+@pytest.mark.parametrize("name", ["bac", "ic3net", "tarmac"])
+def test_neighbor_affects_receiver_but_a_masked_agent_does_not(name):
+    comm = module(name)
+    h, mask, gate = inputs()
+    original = comm(h, mask, gate, {}).c[:, 0]
+    changed = h.clone()
+    changed[:, 1, 0] += 3.0  # BAC 的硬消息符号也会翻转。
+    assert (
+        torch.linalg.vector_norm(comm(changed, mask, gate, {}).c[:, 0] - original)
+        > 1e-5
+    )
+    changed = h.clone()
+    changed[:, 2] += 100
+    torch.testing.assert_close(comm(changed, mask, gate, {}).c[:, 0], original)
+    mask.zero_()
+    torch.testing.assert_close(
+        comm(changed, mask, gate, {}).c, comm(h, mask, gate, {}).c
+    )
 
 
-# ---- P2：逐环境信道概率不被取均值 --------------------------------------
-def test_each_parallel_environment_keeps_its_channel_probability():
-    comm = simple_comm()
-    mask = (~torch.eye(3, dtype=torch.bool)[None]).repeat(2, 1, 1)
-    out = comm(torch.ones(2, 3, 1), mask, torch.ones(2, 3),
-               {"drop_p": np.array([0.0, 1.0], dtype=np.float32), "flip_p": np.zeros(2)})
-    assert not out.noise.drop[0].any()
-    assert torch.equal(out.noise.drop[1], mask[1])
+@pytest.mark.parametrize("name", ["bac", "ic3net", "tarmac"])
+def test_silent_senders_are_invisible_and_receiver_gate_does_not_block_reception(name):
+    comm = module(name)
+    h, mask, gate = inputs()
+    original = comm(h, mask, gate, {}).c[:, 0]
+    gate[:, 0] = 0  # 自己不发言仍可接收。
+    torch.testing.assert_close(comm(h, mask, gate, {}).c[:, 0], original)
+    gate[:, 1] = 0
+    silent = comm(h, mask, gate, {})
+    changed = h.clone()
+    changed[:, 1] += 100
+    torch.testing.assert_close(comm(changed, mask, gate, {}).c, silent.c)
+    assert torch.count_nonzero(silent.c) == 0
+    assert torch.count_nonzero(silent.attn) == 0
 
 
-@pytest.mark.parametrize("api", ["torch", "numpy"])
-def test_sample_noise_accepts_per_env_probability(api):
-    mask = (~np.eye(3, dtype=bool)[None]).repeat(2, 0)
-    if api == "torch":
-        noise = sample_noise(torch.as_tensor(mask), 1, np.array([0.0, 1.0]),
-                             np.zeros(2))
-        assert not noise.drop[0].any() and torch.equal(noise.drop[1], torch.as_tensor(mask[1]))
-    else:
-        noise = sample_noise_np(np.random.default_rng(0), mask, 1, np.array([0.0, 1.0]), 0.0)
-        assert not noise["drop"][0].any() and np.array_equal(noise["drop"][1], mask[1])
+@pytest.mark.parametrize("name", ["bac", "ic3net", "tarmac"])
+def test_all_masked_or_dropped_edges_have_zero_context_and_finite_gradients(name):
+    comm = module(name)
+    h, mask, gate = inputs()
+    h.requires_grad_()
+    noise = ChannelNoise(
+        drop=mask.clone(), flip=torch.zeros(1, 3, 3, 2, dtype=torch.bool)
+    )
+    out = comm(h, mask, gate, {}, noise=noise)
+    assert torch.count_nonzero(out.c) == 0
+    assert torch.count_nonzero(out.attn) == 0
+    out.c.sum().backward()
+    assert torch.isfinite(h.grad).all()
+    assert all(
+        p.grad is None or torch.isfinite(p.grad).all() for p in comm.parameters()
+    )
 
 
-# ---- 既有语义不回退 ----------------------------------------------------
-def test_sign_output_and_straight_through_gradient():
-    comm = simple_comm()
-    h = torch.tensor([[[-2.0], [0.0], [2.0]]], requires_grad=True)
-    msg = comm.encode_msg(h)
-    assert torch.equal(msg, torch.tensor([[[-1.0], [1.0], [1.0]]]))
-    msg.sum().backward()
-    assert torch.equal(h.grad, torch.ones_like(h))
+@pytest.mark.parametrize("name", ["bac", "ic3net", "tarmac"])
+def test_dropped_sender_is_excluded_from_normalization_and_still_pays_bits(name):
+    comm = module(name)
+    h, mask, gate = inputs()
+    mask[0, 0, 2] = True
+    drop = torch.zeros_like(mask)
+    drop[0, 0, 1] = True
+    noise = ChannelNoise(drop, torch.zeros(1, 3, 3, 2, dtype=torch.bool))
+    out = comm(h, mask, gate, {}, noise=noise)
+    assert out.attn[0, 0, 1] == 0 and out.attn[0, 0, 2] == 1
+    only_second = mask.clone()
+    only_second[0, 0, 1] = False
+    torch.testing.assert_close(out.c, comm(h, only_second, gate, {}).c)
+    torch.testing.assert_close(out.bits, gate * comm.bits_per_msg)
 
 
-def test_bits_charge_sender_once_even_when_packet_is_dropped():
-    comm = CommBAC(hidden=1, msg_bits=4)
-    mask = ~torch.eye(3, dtype=torch.bool)[None]
-    gate = torch.tensor([[1.0, 0.0, 1.0]])
-    noise = zero_noise(mask, length=4)
-    noise.drop.copy_(mask)
-    out = comm(torch.ones(1, 3, 1), mask, gate, {}, noise=noise)
-    assert torch.equal(out.bits, torch.tensor([[4.0, 0.0, 4.0]]))
+@pytest.mark.parametrize("name", ["bac", "ic3net", "tarmac"])
+def test_attention_respects_environment_top_k(name):
+    with FormationCommEnv(
+        EnvConfig(backend="mock", n_agents=6, comm_radius=10.0, recv_k=2)
+    ) as env:
+        mask = torch.as_tensor(env.reset(seed=0).comm_mask)[None]
+    out = module(name)(torch.ones(1, 6, 4), mask, torch.ones(1, 6), {})
+    assert ((out.attn != 0).sum(-1) <= 2).all()
+    assert not out.attn[~mask].any()
+    torch.testing.assert_close(out.attn.sum(-1), torch.ones(1, 6))
 
 
-def test_stored_noise_reproduces_context_and_attention():
-    torch.manual_seed(7)
-    comm = CommBAC(hidden=4, msg_bits=2)
-    mask = ~torch.eye(3, dtype=torch.bool)[None]
-    noise = sample_noise(mask, 2, 0.3, 0.2)
-    h = torch.randn(1, 3, 4)
-    gate = torch.ones(1, 3)
-    first = comm(h, mask, gate, {}, noise=noise)
-    second = comm(h, mask, gate, {}, noise=noise)
-    assert torch.equal(first.c, second.c)
-    assert torch.equal(first.attn, second.attn)
+@pytest.mark.parametrize("binary", [True, False])
+def test_numpy_and_torch_channel_match_hand_computed_directed_noise(binary):
+    msgs = np.array([[[1, -1], [-1, -1], [1, 1]]], dtype=np.float32)
+    mask = np.zeros((1, 3, 3), dtype=bool)
+    mask[0, 0, 1] = mask[0, 1, 2] = True
+    drop = np.zeros_like(mask)
+    drop[0, 1, 2] = True
+    flip = np.zeros((1, 3, 3, 2), dtype=bool)
+    flip[0, 0, 1, 0] = True
+    expected = np.zeros_like(flip, dtype=np.float32)
+    expected[0, 0, 1] = [1 if binary else -1, -1]
+    actual_np = apply_noise_np(msgs, mask, {"drop": drop, "flip": flip}, binary=binary)
+    actual_torch = apply_noise(
+        torch.from_numpy(msgs),
+        torch.from_numpy(mask),
+        ChannelNoise(torch.from_numpy(drop), torch.from_numpy(flip)),
+        binary=binary,
+    )
+    np.testing.assert_array_equal(actual_np, expected)
+    np.testing.assert_array_equal(actual_torch.numpy(), expected)
 
 
-def test_binary_flip_applies_to_each_bit():
-    msgs = torch.tensor([[[-1.0], [1.0]]])
-    mask = torch.tensor([[[False, True], [False, False]]])
-    noise = zero_noise(mask)
-    noise.flip[0, 0, 1, 0] = True
-    before = apply_noise(msgs, mask, zero_noise(mask))
-    after = apply_noise(msgs, mask, noise)
-    assert after[0, 0, 1, 0] == -before[0, 0, 1, 0]
+def test_channel_samples_each_environments_probability_without_averaging():
+    mask = torch.ones(2, 3, 3, dtype=torch.bool)
+    noise = sample_noise(mask, 2, torch.tensor([0.0, 1.0]), torch.tensor([1.0, 0.0]))
+    assert not noise.drop[0].any() and noise.drop[1].all()
+    assert noise.flip[0].all() and not noise.flip[1].any()
+    np_noise = sample_noise_np(
+        np.random.default_rng(0),
+        mask.numpy(),
+        2,
+        np.array([0.0, 1.0]),
+        np.array([1.0, 0.0]),
+    )
+    np.testing.assert_array_equal(noise.drop.numpy(), np_noise["drop"])
+    np.testing.assert_array_equal(noise.flip.numpy(), np_noise["flip"])
 
 
-def test_actor_joint_log_probability_contains_gate_action():
-    torch.manual_seed(3)
-    actor = Actor(obs_dim=6, n_obs=1, n_actions=5, hidden=4,
-                  comm_module=CommBAC(hidden=4, msg_bits=2))
-    mask = ~torch.eye(2, dtype=torch.bool)[None]
-    gate = torch.tensor([[0.0, 1.0]])
-    out = actor(torch.zeros(1, 2, 6), torch.ones(1, 2, 1, dtype=torch.bool),
-                mask, actor.init_hidden(1, 2), {}, gate=gate, noise=zero_noise(mask, 2))
-    action = torch.tensor([[0, 1]])
-    expected = (torch.distributions.Categorical(logits=out.action_logits).log_prob(action)
-                + torch.distributions.Bernoulli(logits=out.gate_logits).log_prob(gate))
-    assert torch.allclose(actor.log_prob(out, action), expected)
+def test_bac_binary_forward_and_ste_reaches_the_neighbor_encoder():
+    comm = module("bac")
+    h, mask, gate = inputs()
+    h.requires_grad_()
+    message = comm.encode_msg(h)
+    assert torch.all(message.abs() == 1)
+    out = comm(h, mask, gate, {})
+    out.c[0, 0, 0].backward()
+    assert h.grad[0, 1].abs().sum() > 0
+    assert comm.w_msg.weight.grad.abs().sum() > 0
+    assert h.grad[0, 2].abs().sum() == 0
 
 
-def test_beta_update_and_individual_reward_match_contract():
-    dual = BetaDual(beta=0.1, lr=0.05, b_max=2.0)
-    reward = dual.shaped_reward(np.ones((1, 2)), np.array([[0.0, 4.0]]))
-    assert np.allclose(reward, [[1.0, 0.6]])
-    assert dual.update(4.0) == pytest.approx(0.2)
-    assert dual.update(0.0) == pytest.approx(0.1)
-    assert dual.update(0.0) == pytest.approx(0.0)
-    assert dual.update(0.0) == 0.0
+def test_broadcast_budget_counts_senders_once_independent_of_edge_count():
+    comm = module("bac")
+    h, mask, gate = inputs()
+    gate[0, 1] = 0
+    sparse = comm(h, mask, gate, {})
+    dense = comm(h, torch.ones_like(mask), gate, {"drop_p": 1.0})
+    torch.testing.assert_close(sparse.bits, torch.tensor([[2.0, 0.0, 2.0]]))
+    torch.testing.assert_close(dense.bits, sparse.bits)
+    mean_bits = float(torch.stack([sparse.bits, dense.bits]).mean())
+    dual = BetaDual(beta=0.1, lr=0.3, b_max=1.0)
+    assert dual.update(mean_bits) == pytest.approx(0.1 + 0.3 * (4 / 3 - 1))
