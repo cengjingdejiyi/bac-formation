@@ -1,22 +1,2 @@
-# B 标定候选；默认 formation 配置不变。依据见 docs/env-calibration.md。
-# python -m bacmarl.runners.train env=formation_calibrated algo=bac seed=0
-env:
-  scene: formation
-  backend: mpe2            # 正式实验必须使用真实物理，缺依赖即报错
-  n_agents: 6
-  max_steps: 100
-  formation_radius: 0.5
-  obs_radius: 0.8          # N=4/6/8 的理想相邻槽位都在感知范围内
-  n_obs: 4
-  comm_radius: 0.8         # 理想编队通信度 N=4:2, N=6:2, N=8:3（受 K=3 截断）
-  recv_k: 3
-  safe_dist: 0.2
-  collision_coef: 1.0
-  max_speed: 1.0
-  success_dist: 0.05
-  success_hold: 10
-  heading: 0.0
-  end_on_success: false
-  channel:
-    drop_p: [0.0, 0.3]
-    flip_p: [0.0, 0.1]
+# 兼容旧命令的别名：完整继承正式配置，禁止在此维护第二份数值。
+extends: formation

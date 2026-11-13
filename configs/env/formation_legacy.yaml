@@ -1,0 +1,6 @@
+# 历史半径对照，禁止用作默认正式实验。
+extends: formation
+env:
+  backend: auto
+  obs_radius: 0.5
+  comm_radius: 0.4

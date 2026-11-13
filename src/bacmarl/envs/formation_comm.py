@@ -25,13 +25,13 @@ ACTIONS = {0: (0.0, 0.0), 1: (-1.0, 0.0), 2: (1.0, 0.0), 3: (0.0, -1.0), 4: (0.0
 @dataclass
 class EnvConfig:
     scene: str = "formation"
-    backend: str = "auto"
+    backend: str = "mpe2"
     n_agents: int = 6
     max_steps: int = 100
     formation_radius: float = 0.5
-    obs_radius: float = 0.5
+    obs_radius: float = 0.8
     n_obs: int = 4
-    comm_radius: float = 0.4
+    comm_radius: float = 0.8
     recv_k: int = 3
     safe_dist: float = 0.2
     collision_coef: float = 1.0

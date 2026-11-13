@@ -1,13 +1,13 @@
 # 负责人 B；数值规律见开题报告 3.1「参数原则」
 env:
   scene: formation          # formation | spread
-  backend: auto             # auto: 有 mpe2 用 mpe2，否则退 mock
+  backend: mpe2             # 正式实验使用真实物理；冒烟须显式选 mock
   n_agents: 6
   max_steps: 100            # T_max
   formation_radius: 0.5     # r_f
-  obs_radius: 0.5           # R_obs
+  obs_radius: 0.8           # R_obs；覆盖 N=4/6/8 的理想相邻槽位
   n_obs: 4                  # n_obs
-  comm_radius: 0.4          # R_comm
+  comm_radius: 0.8          # R_comm；接收数仍受 K=3 限制
   recv_k: 3                 # K
   safe_dist: 0.2            # d_safe
   collision_coef: 1.0       # λ_c

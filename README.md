@@ -4,6 +4,8 @@
 
 上层文档：`docs/contracts.md`（接口与规范，唯一事实来源）、开题报告附录 A.1–A.8。
 
+推荐开发基线为 **Python 3.11**，与 CI 一致；其他版本作为兼容性验证单独记录，不把不同机器的 Python/torch 版本写成同一套环境。依赖约束统一放在 `pyproject.toml` / `requirements.txt`，标定输出同时保存实际运行版本。
+
 ## 快速开始
 
 ```bash
@@ -11,6 +13,7 @@ pip install -r requirements.txt      # 或 pip install -e ".[dev,env]"
 pip install -e . --no-deps           # 使用 requirements.txt 安装后注册 src 包
 python scripts/smoke.py              # 契约冒烟：不装 torch 也能过
 python -m pytest -q tests            # 形状与缓冲测试
+python scripts/verify_transitions.py # 实测当前训练采样器的奖励/终止对齐
 python -m bacmarl.runners.train env=formation algo=bac env.n_agents=6 algo.msg_bits=4 seed=0
 ```
 
@@ -50,21 +53,21 @@ results/            实验输出（不入库）
 
 W1 环境+框架+接口冻结 → W2–3 方法跑通 → W4–5 正式实验 → W6 结题。
 
-## 当前验证状态（2026-11-13，本机 Python 3.13 + torch 2.15.0+cpu）
+## 修复与验证状态（2026-11-13）
 
 | 检查 | 结果 |
 |---|---|
-| `python scripts/smoke.py` | 18 项 PASS，`SMOKE OK` |
-| `python -m pytest -q tests` | 16 passed（无 skip） |
-| `python -m compileall src scripts tests` | 退出码 0 |
-| 四种方法 32 步小规模训练 | `bac` / `ippo` / `tarmac` / `ic3net` 全部 `[DONE]` |
-| BAC 128 步训练 | `comm/bits ≈ 1.92–2.13`，与 `budget_bits=2.0` 吻合；β 在 0.096–0.102 间摆动（对偶在起作用） |
-| `runners/evaluate.py` | 生成 `robust.csv` |
+| 环境、通信信息流、缓存与 GAE 测试 | 102 项测试；含有向边、静默/丢包、STE、发送预算及跨回合边界 |
+| `python scripts/verify_transitions.py` | 首步与末步缓存奖励均与实际 step 返回值一致 |
+| rollout 分段 | 环境与隐状态跨段延续；仅 done 环境重置 |
+| CI | Python 3.11，验证可编辑安装、完整测试与真实 MPE2 的标准模块训练入口 |
+| 正式参数 | `env=formation`：真实 MPE2，R_obs=R_comm=0.8；旧半径移至 `formation_legacy` |
+
+旧版“训练跑通 / bits 接近预算”的结果受通信方向和奖励错位影响，不能证明通信有效或作为正式实验数据。修复依据、逐项核查和可复现命令见 [问题核查与修复](docs/issue-fixes.md)。短训练仅验证代码运行，不代表策略收敛。
 
 ## B 环境与标定交付（2026-11-13）
 
-- **B 已完成**：真实 MPE2 编队后端、局部邻居/通信掩码、契约奖励与成功判定、批量自动 reset 修复及可复现标定已落地，详见 [B 交付与标定报告](docs/env-calibration.md)。`env=formation_calibrated` 提供候选配置，原默认数值不变。选做的 `simple_spread` 尚未实现，入口会显式报错。
-- 本次 Python 3.14.2 + torch 2.11.0+cpu + MPE2 1.1.1 验收：67 项测试全部通过（无 skip）、契约冒烟通过、120 个标定回合完成、真实后端 BAC 128 步训练与 checkpoint 评测通过。短训练只验证接口，不代表策略已收敛。
+- **B 已完成**：真实 MPE2 编队后端、局部邻居/通信掩码、契约奖励与成功判定、批量自动 reset 修复及可复现标定已落地，详见 [B 交付与标定报告](docs/env-calibration.md)。`formation_calibrated` 现在仅是正式配置的兼容别名，避免维护第二份数值。选做的 `simple_spread` 尚未实现，入口会显式报错。
 
 ## 已知缺口（按负责人认领）
 

@@ -256,7 +256,7 @@ def test_mpe2_is_real_physics_in_stable_agent_order(n):
 
 def test_auto_selects_installed_mpe2():
     pytest.importorskip("mpe2.simple_formation_v1")
-    with FormationCommEnv(EnvConfig()) as env:
+    with FormationCommEnv(EnvConfig(backend="auto")) as env:
         assert env.backend == "mpe2" and env._mpe_env is not None
 
 
