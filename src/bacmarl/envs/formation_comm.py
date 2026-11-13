@@ -36,9 +36,10 @@ class EnvConfig:
     safe_dist: float = 0.2
     collision_coef: float = 1.0
     max_speed: float = 1.0
-    success_dist: float = 0.05
+    success_dist: float = 0.09
     success_hold: int = 10
     heading: float = 0.0
+    heading_mode: str = "dynamic"
     end_on_success: bool = False
     channel: dict = field(
         default_factory=lambda: {"drop_p": [0.0, 0.3], "flip_p": [0.0, 0.1]}
@@ -72,6 +73,8 @@ class EnvConfig:
                 raise ValueError(f"invalid {name}: {value}")
         if not np.isfinite(self.heading):
             raise ValueError("heading must be finite")
+        if self.heading_mode not in ("dynamic", "fixed"):
+            raise ValueError("heading_mode must be dynamic or fixed")
         for key in ("drop_p", "flip_p"):
             value = self.channel.get(key, 0.0)
             bounds = np.asarray(value, dtype=float)
@@ -197,6 +200,13 @@ class FormationCommEnv:
     def n_agents(self) -> int:
         return self.cfg.n_agents
 
+    @property
+    def heading(self) -> float:
+        """当前槽位朝向；固定模式只用于显式对照。"""
+        if self.cfg.heading_mode == "fixed":
+            return self.cfg.heading
+        return metrics.formation_heading(self._pos, self._center)
+
     # ---- 采样 -----------------------------------------------------
     def _sample_channel(self) -> dict:
         cfg = self.cfg.channel
@@ -275,14 +285,15 @@ class FormationCommEnv:
             self._pos = (self._pos + self._vel).astype(np.float32)
         self._t += 1
 
+        heading = self.heading
         ferr = metrics.formation_error(
-            self._pos, self._center, cfg.formation_radius, cfg.heading
+            self._pos, self._center, cfg.formation_radius, heading
         )
         coll = metrics.count_collisions(self._pos, cfg.safe_dist)
         self._collisions_ep += coll
 
         success = metrics.all_in_slots(
-            self._pos, self._center, cfg.formation_radius, cfg.success_dist, cfg.heading
+            self._pos, self._center, cfg.formation_radius, cfg.success_dist, heading
         )
         self._hold = self._hold + 1 if success else 0
         done_task = self._hold >= cfg.success_hold
@@ -351,7 +362,7 @@ class FormationCommEnv:
 
         if ferr is None:
             ferr = metrics.formation_error(
-                pos, self._center, cfg.formation_radius, cfg.heading
+                pos, self._center, cfg.formation_radius, self.heading
             )
 
         info = {
@@ -365,6 +376,7 @@ class FormationCommEnv:
             "center": self._center.copy(),
             "pos": pos.copy(),
             "backend": self.backend,
+            "heading": self.heading,
         }
         return EnvStep(
             obs=obs,

@@ -41,7 +41,7 @@ raw_env(N: int = 4, max_cycles: int = 25, continuous_actions: bool = False,
 | `obs` 单智能体 | `(6,)` float32 | 契约要求 `[N, 4 + 2*n_obs] = (16,)`：MPE2 原版**看不到队友**，邻居槽位必须自己从 `env.unwrapped.world.agents` 的位置算 |
 | obs 前 6 维 | `[vx, vy, px, py, center_x-px, center_y-py]` | 包装层只保留自身速度与中心相对位置，补入局部邻居，不泄漏绝对位置 |
 | `action_space` | `Discrete(5)` | 与契约一致（0 悬停 / 1 左 / 2 右 / 3 下 / 4 上），无需映射 |
-| `reward` | 各智能体相同（共享团队奖励，实测 `-0.7082`） | 原生使用动态朝向并裁剪距离，不能直接叠加惩罚；按契约重算固定朝向槽位奖励并广播到 `[N]` |
+| `reward` | 各智能体相同（共享团队奖励，实测 `-0.7082`） | 原生裁剪距离，不能直接叠加惩罚；按契约重算未裁剪的动态朝向槽位奖励并广播到 `[N]`，显式 fixed 模式仅作历史对照 |
 | `step()` 返回 | 5 元组 `(obs, rew, term, trunc, info)` | PettingZoo 并行接口，照搬 |
 | `info` | 空 dict（实测 `[]`） | 编队误差、碰撞数、完成标记必须我们自己算并塞进 `info` |
 | 地标位置 | 一个中心 landmark（实测 `[0.357, -0.466]` 附近） | 编队中心 `p^c` 用它；报告里 p^c 来源就是这里，不需要另设 |

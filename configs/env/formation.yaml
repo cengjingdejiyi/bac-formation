@@ -5,6 +5,7 @@ env:
   n_agents: 6
   max_steps: 100            # T_max
   formation_radius: 0.5     # r_f
+  heading_mode: dynamic    # 报告 §1.4：每步由最小极角无人机锚定
   obs_radius: 0.8           # R_obs；覆盖 N=4/6/8 的理想相邻槽位
   n_obs: 4                  # n_obs
   comm_radius: 0.8          # R_comm；接收数仍受 K=3 限制
@@ -12,7 +13,7 @@ env:
   safe_dist: 0.2            # d_safe
   collision_coef: 1.0       # λ_c
   max_speed: 1.0            # v_max
-  success_dist: 0.05        # δ
+  success_dist: 0.09        # δ；Issue #4：局部脚本多种子标定，保持 10 步
   success_hold: 10          # H
   end_on_success: false
   channel:

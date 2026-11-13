@@ -22,7 +22,11 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from bacmarl.envs import EnvConfig, EnvStep, FormationCommEnv  # noqa: E402
 from bacmarl.envs.metrics import match_slots, slot_positions  # noqa: E402
-from bacmarl.envs.scripted import ScriptedController, _dir_to_action  # noqa: E402
+from bacmarl.envs.scripted import (
+    RadialController,
+    ScriptedController,
+    _dir_to_action,
+)  # noqa: E402
 from bacmarl.utils.config import load_config  # noqa: E402
 
 
@@ -31,7 +35,10 @@ class SlotOracle:
 
     def __init__(self, cfg: EnvConfig, initial: EnvStep):
         slots = slot_positions(
-            initial.info["center"], cfg.formation_radius, cfg.n_agents, cfg.heading
+            initial.info["center"],
+            cfg.formation_radius,
+            cfg.n_agents,
+            initial.info["heading"],
         )
         perm, _ = match_slots(initial.info["pos"], slots)
         self.targets = slots[perm]
@@ -59,7 +66,8 @@ def run_episode(cfg: EnvConfig, seed: int, policy: str) -> dict:
     with FormationCommEnv(cfg) as env:
         step = env.reset(seed=seed)
         initial_error = step.info["formation_err"]
-        radial = ScriptedController(cfg.n_agents, cfg.formation_radius)
+        radial = RadialController(cfg.n_agents, cfg.formation_radius)
+        scripted = ScriptedController(cfg.n_agents, cfg.formation_radius)
         oracle = SlotOracle(cfg, step)
         total_return, first_success = 0.0, None
         obs_degrees, comm_degrees, isolated = [], [], []
@@ -74,6 +82,8 @@ def run_episode(cfg: EnvConfig, seed: int, policy: str) -> dict:
                 action = rng.integers(0, 5, size=cfg.n_agents, dtype=np.int64)
             elif policy == "radial":
                 action = radial.act(step.obs, step.obs_mask)
+            elif policy == "scripted":
+                action = scripted.act(step.obs, step.obs_mask)
             elif policy == "slot_oracle":
                 action = oracle.act(step)
             else:
@@ -84,7 +94,10 @@ def run_episode(cfg: EnvConfig, seed: int, policy: str) -> dict:
                 first_success = step.info["t"]
 
         slots = slot_positions(
-            step.info["center"], cfg.formation_radius, cfg.n_agents, cfg.heading
+            step.info["center"],
+            cfg.formation_radius,
+            cfg.n_agents,
+            step.info["heading"],
         )
         _, distances = match_slots(step.info["pos"], slots)
         return {
@@ -128,11 +141,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--agents", nargs="+", type=int, default=[4, 6, 8])
     parser.add_argument("--seeds", nargs="+", type=int, default=[0, 1, 2, 3, 4])
     parser.add_argument("--steps", type=int, default=None)
+    parser.add_argument("--success-dist", type=float, default=None)
     parser.add_argument(
         "--policies",
         nargs="+",
-        choices=["hover", "random", "radial", "slot_oracle"],
-        default=["hover", "random", "radial", "slot_oracle"],
+        choices=["hover", "random", "radial", "scripted", "slot_oracle"],
+        default=["hover", "random", "radial", "scripted", "slot_oracle"],
     )
     parser.add_argument("--out", type=Path, default=ROOT / "results" / "calibration")
     args = parser.parse_args(argv)
@@ -143,6 +157,9 @@ def main(argv: list[str] | None = None) -> int:
         base,
         backend=args.backend,
         max_steps=base.max_steps if args.steps is None else args.steps,
+        success_dist=(
+            base.success_dist if args.success_dist is None else args.success_dist
+        ),
     )
     rows = []
     for n in args.agents:
@@ -196,7 +213,7 @@ def main(argv: list[str] | None = None) -> int:
         "agents": args.agents,
         "seeds": args.seeds,
         "policies": args.policies,
-        "note": "slot_oracle requires global state; feasibility diagnostic only",
+        "note": "scripted uses per-agent local observations; slot_oracle requires global state",
     }
     (args.out / "config.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
