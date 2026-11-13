@@ -1,4 +1,8 @@
-"""IC3Net 式：连续消息 + 均值聚合（对比基线，负责人 D）。"""
+"""IC3Net 式：连续消息 + 均值聚合（对比基线，负责人 D）。
+
+边约定与信道一致：``comm_mask[b, i, j]`` 中 i 是接收者、j 是发送者；
+``edge[b, i, j] = msgs[b, j]``，均值在物理邻居上归一化（丢包消息按零参与）。
+"""
 from __future__ import annotations
 
 import torch
@@ -21,8 +25,9 @@ class CommIC3Net(CommModule):
 
     def forward(self, h, comm_mask, gate, channel, noise=None) -> CommOut:
         b, n, _ = h.shape
+        channel = channel if isinstance(channel, dict) else {}
         if noise is None:
-            drop_p = float(channel.get("drop_p", 0.0)) if isinstance(channel, dict) else 0.0
+            drop_p = channel.get("drop_p", 0.0)
             noise = sample_noise(comm_mask, 0, drop_p, 0.0)
         msgs = self.w_msg(h) * gate.unsqueeze(-1).to(h.dtype)      # [B, N, M]
         edge = apply_noise(msgs, comm_mask, noise, binary=False)   # [B, N, N, M]

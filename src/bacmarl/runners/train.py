@@ -94,7 +94,8 @@ def main(argv: list[str] | None = None) -> int:
             obs_t = torch.as_tensor(batch['obs'])
             mask_t = torch.as_tensor(batch['obs_mask'])
             cmask_t = torch.as_tensor(batch['comm_mask'])
-            channel = {k: float(np.mean(v)) for k, v in batch['channel'].items()}
+            # 保留逐环境信道参数 [B]：每个环境每回合各采各的概率，不在训练入口取均值
+            channel = {k: np.asarray(v, dtype=np.float32) for k, v in batch['channel'].items()}
             with torch.no_grad():
                 out = actor(obs_t, mask_t, cmask_t, h, channel)
                 action = Categorical(logits=out.action_logits).sample()

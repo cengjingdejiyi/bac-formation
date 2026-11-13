@@ -1,6 +1,9 @@
 """BAC：带宽感知注意力通信（主方法，负责人 A）。
 
 三阶段：门控（外部采样）→ 二值消息 sign + STE → Top-k 注意力聚合。
+
+边约定：``comm_mask[b, i, j]`` 中 i 是接收者、j 是发送者；消息沿发送者轴 j 展开
+（``edge[b, i, j] = msgs[b, j]``），门控、丢弃、翻转与注意力共用同一条 j→i 边。
 """
 from __future__ import annotations
 
@@ -35,8 +38,10 @@ class CommBAC(CommModule):
     def forward(self, h, comm_mask, gate, channel, noise=None) -> CommOut:
         b, n, _ = h.shape
         L = self.msg_bits
-        drop_p = float(channel.get("drop_p", 0.0)) if isinstance(channel, dict) else 0.0
-        flip_p = float(channel.get("flip_p", 0.0)) if isinstance(channel, dict) else 0.0
+        channel = channel if isinstance(channel, dict) else {}
+        # 信道概率支持标量或逐环境向量 [B]，直接交给 sample_noise 广播
+        drop_p = channel.get("drop_p", 0.0)
+        flip_p = channel.get("flip_p", 0.0)
 
         if noise is None:
             noise = sample_noise(comm_mask, L, drop_p, flip_p)
@@ -48,10 +53,15 @@ class CommBAC(CommModule):
         q = self.w_q(h)                                          # [B, N, H]
         k = self.w_k(edge)                                       # [B, N, N, H]
         score = torch.einsum("bnh,bnmh->bnm", q, k) / (self.hidden ** 0.5)
-        vis = comm_mask & gate.to(torch.bool).unsqueeze(1).expand(b, n, n)  # 只有已发言邻居可见
+        # 有效边 = 物理可达 ∧ 发送者发言 ∧ 消息未被丢弃；softmax 只在有效边上归一化
+        vis = (comm_mask
+               & gate.to(torch.bool).unsqueeze(1).expand(b, n, n)
+               & ~noise.drop)                                    # [B, N, N]
         attn = self._masked_softmax(score, vis)
+        # 整行没有有效边时显式置零：否则 softmax 会给均匀权重，w_v 的偏置会漏成非零上下文。
+        attn = attn * vis.any(dim=-1, keepdim=True).to(attn.dtype)
         v = self.w_v(edge)                                       # [B, N, N, H]
-        c = torch.einsum("bnm,bnmh->bnh", attn, v)
+        c = torch.einsum("bnm,bnmh->bnh", attn, v)               # 无有效边时 c 自然为 0
 
-        bits = gate.float() * float(L)                            # [B, N]
+        bits = gate.float() * float(L)                            # [B, N]：发送侧计费，丢包不退款
         return CommOut(c=c, bits=bits, attn=attn, noise=noise)

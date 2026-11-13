@@ -22,7 +22,7 @@ class FormationCommEnv:
 | obs | [N, 4 + 2*n_obs] | float32 | 自身速度(2) + 编队中心相对位置(2) + 最近 n_obs 个邻居相对位置（按距离升序，不足补零） |
 | obs_mask | [N, n_obs] | bool | 邻居槽位是否有效 |
 | state | [D_state] | float32 | 全体位置与速度 + 编队中心，仅供 Critic |
-| comm_mask | [N, N] | bool | j 在 i 的 R_comm 内且属最近 K 个；对角为 False；不含门控与丢包 |
+| comm_mask | [N, N] | bool | `comm_mask[i, j]`：i 是接收者、j 是发送者，j 在 i 的 R_comm 内且属最近 K 个；对角为 False；不含门控与丢包 |
 | reward | [N] | float32 | 团队项 r_t（各机相同）；通信代价不在环境内计算 |
 | done | 标量 | bool | 时限到达，或完成成立且配置提前结束 |
 | info | dict | — | formation_err, collisions, success, hold_steps, channel |
@@ -32,6 +32,7 @@ class FormationCommEnv:
 - `reward = -(formation_err + λ_c·collisions)`；槽位匹配用 `scipy.optimize.linear_sum_assignment`，无 scipy 时退化为贪心。
 - 信道参数由环境每回合 reset 时采样（训练从区间采，评估取固定值），经 `info["channel"]` 传给模型。
 - `vec_env` 把 B 个环境堆成 `[B, N, ...]`，回合结束自动 reset，回合级统计留在 `info`。
+- `info["channel"]` 在 `vec_env` 中按环境堆成 `[B]`：并行环境中各环境每回合的信道概率本就不同，训练入口必须原样传给模型，不得取均值；模型侧（`channel.py` / 通信模块）对 `drop_p`、`flip_p` 同时支持标量与 `[B]`。
 
 ## 3. 模型接口（负责人 C；通信模块 A、D）
 
@@ -66,6 +67,12 @@ class Critic(nn.Module):
 5. `log π = log π(a) + log π(g)`，无门控时只有前一项
 
 信道：`channel.py` 提供 `sample(recv_mask, L, params)` 与 `apply(msgs, recv_mask, noise)`。二值消息同时做整条丢弃和比特翻转；连续消息（IC3Net/TarMAC）只做整条丢弃。
+
+信道边约定（与环境、注意力共用同一条边，A 验收 issue #2 后冻结）：
+- `comm_mask[b, i, j]` / `recv_mask[b, i, j]`：接收者 i 在前、发送者 j 在后，`True` 表示 i 能收到 j。
+- `apply_noise` 输出 `edge[b, i, j] = msgs[b, j]`：第 3 维（发送者轴）放的是发送者 j 的消息，不是接收者自己的消息。
+- 注意力只在「物理可达 ∧ 发送者发言 ∧ 消息未丢弃」的边上归一化；整行没有任何有效边时 `attn` 与上下文 `c` 均为 0（`w_v` 的偏置不得漏成上下文）。
+- 发送侧计费仍为 `gate × L`：丢包不退款，也不按接收者数量重复计费。
 
 ## 4. 训练接口（负责人 C）
 

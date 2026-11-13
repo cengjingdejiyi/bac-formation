@@ -1,4 +1,8 @@
-"""TarMAC 式：全精度连续广播 + 注意力（通信性能上界，负责人 D）。"""
+"""TarMAC 式：全精度连续广播 + 注意力（通信性能上界，负责人 D）。
+
+边约定与 BAC 一致：``comm_mask[b, i, j]`` 中 i 是接收者、j 是发送者；
+注意力只在物理可达且未被丢弃的 j→i 边上归一化，整行无有效边时权重与上下文为 0。
+"""
 from __future__ import annotations
 
 import torch
@@ -23,8 +27,9 @@ class CommTarMAC(CommModule):
 
     def forward(self, h, comm_mask, gate, channel, noise=None) -> CommOut:
         b, n, _ = h.shape
+        channel = channel if isinstance(channel, dict) else {}
+        drop_p = channel.get("drop_p", 0.0)
         if noise is None:
-            drop_p = float(channel.get("drop_p", 0.0)) if isinstance(channel, dict) else 0.0
             noise = sample_noise(comm_mask, 0, drop_p, 0.0)
         msgs = self.w_msg(h).contiguous()                 # [B, N, M]
         msgs = msgs * gate.unsqueeze(-1).to(msgs.dtype)   # 无门控时 gate 全 1
@@ -32,7 +37,9 @@ class CommTarMAC(CommModule):
         q = self.w_q(h)
         k = self.w_k(edge)
         score = torch.einsum("bnh,bnmh->bnm", q, k) / (self.hidden ** 0.5)
-        attn = self._masked_softmax(score, comm_mask)
+        vis = comm_mask & ~noise.drop                     # [B, N, N]：丢弃边不参与归一化
+        attn = self._masked_softmax(score, vis)
+        attn = attn * vis.any(dim=-1, keepdim=True).to(attn.dtype)
         v = self.w_v(edge)
         c = torch.einsum("bnm,bnmh->bnh", attn, v)
         bits = gate.float() * float(self.bits_per_msg)

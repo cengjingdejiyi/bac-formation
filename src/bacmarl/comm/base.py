@@ -14,7 +14,7 @@ import torch.nn as nn
 class CommOut:
     c: torch.Tensor          # [B, N, C] 聚合后的通信上下文
     bits: torch.Tensor       # [B, N]    本步实际发送比特数
-    attn: torch.Tensor       # [B, N, N] 注意力/可见权重（无注意力时退化为掩码）
+    attn: torch.Tensor       # [B, N, N] 注意力/可见权重，attn[b,i,j] 为接收者 i 对发送者 j 的权重
     noise: object = None     # ChannelNoise，供 PPO 更新时复用
 
 
