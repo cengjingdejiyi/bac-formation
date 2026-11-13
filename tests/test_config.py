@@ -45,6 +45,8 @@ def test_legacy_environment_only_overrides_historical_parameters():
     assert legacy == {
         **formal,
         "backend": "auto",
+        "heading_mode": "fixed",
+        "success_dist": 0.05,
         "obs_radius": 0.5,
         "comm_radius": 0.4,
     }

@@ -37,11 +37,12 @@ class FormationCommEnv:
 
 - `backend=mpe2` 使用 `mpe2.simple_formation_v1.parallel_env` 的真实物理；`auto` 仅在未安装 `mpe2` 时告警退回 mock，安装损坏或接口不匹配须报错。mock 仅用于契约冒烟。
 - 原生观测是 `[速度(2), 绝对位置(2), 地标相对位置(2)]`；包装层从 world 按固定 agent 顺序读取位置/速度，统一组装上述局部观测，不向 Actor 泄漏绝对位置。
-- 中心取唯一 landmark；原生奖励使用动态朝向和距离裁剪，与本契约不同，故统一重算固定 `heading`、可配 `formation_radius` 的槽位误差与安全距离惩罚。`max_speed` 限制速度向量的模长。
+- 中心取唯一 landmark。正式环境采用 `heading_mode=dynamic`：每个状态以相对中心极角（归一化到 `[0, 2π)`）最小的无人机锚定槽位朝向，与报告 §1.4 和 MPE2 一致；规则编队整体旋转后仍可完成。包装层按该朝向、可配 `formation_radius` 重算未裁剪的匹配误差与安全距离惩罚，奖励、完成判定和诊断使用同一朝向。`info.heading` 记录实际朝向，仅供诊断，不新增 Actor 观测。显式 `heading_mode=fixed` 时使用配置的 `heading`，保留历史固定朝向实验。`max_speed` 限制速度向量的模长。
 - 完成要求所有匹配距离不超过 `success_dist` 且连续保持 `success_hold` 步；`info.success` 表示当前满足保持条件。回合统计 `ep.success` 记录本回合是否曾完成。
 - 自动 reset 后 obs/state/comm_mask/channel 来自新回合，`reward`、`done`、`ep` 保留刚结束的转移；`info_raw[k].info["terminal_step"]` 保留终止帧（含终止指标和信道），便于评测。后续回合不重新播种，整段运行可复现且初始状态不重复。
 - 单环境和并行环境提供 `close()` 及上下文管理器以释放 MPE2 资源。`scene=spread` 仍是选做扩展，本次不实现；须显式报错，避免误把编队结果当作覆盖实验。
 - 标定脚本和报告见 `scripts/calibrate_env.py`、`docs/env-calibration.md`。正式编队配置统一为 `formation.yaml`（R_obs=R_comm=0.8）；旧半径只保留在明确标记的 `formation_legacy.yaml` 对照配置中。
+- B 阈值验收默认采用 `ScriptedController`（标定策略名 `scripted`）：每架机仅使用自身速度、中心相对位置和掩码允许的邻居相对位置，通过径向收敛、局部角间距均衡与速度反馈排列槽位。不读取其他无人机的观测行、全局 state、`info.pos`、编号或匈牙利指派。`radial` 保留旧控制器作对照；`slot_oracle` 仍仅为全局可行性诊断。正式 `success_dist=0.09` 按局部控制器多种子标定，保留 `success_hold=10, max_steps=100`；0.05 仍可显式配置作严格阈值对照。脚本验证不代表学习策略收敛。
 
 ## 3. 模型接口（负责人 C；通信模块 A、D）
 
@@ -114,6 +115,7 @@ class Critic(nn.Module):
 | env.comm_radius, env.recv_k | 通信半径 R_comm、接收容量 K | B |
 | env.safe_dist, env.collision_coef | d_safe、λ_c | B |
 | env.max_speed | v_max | B |
+| env.heading_mode, env.heading | dynamic 为正式状态锚定朝向；fixed 为显式固定朝向对照 | B |
 | env.success_dist, env.success_hold | 完成阈值 δ、保持步数 H | B |
 | env.channel.drop_p, env.channel.flip_p | 训练采区间，评估取定值 | B |
 | algo.comm | none / ic3net / tarmac / bac | A |
@@ -127,6 +129,7 @@ class Critic(nn.Module):
 - 所有方法共用 `train.*`，只允许改 `algo.*`。
 - 任何默认值改动须在群里同步并写进提交说明。
 - 本次修复统一正式参数：`backend=mpe2, obs_radius=comm_radius=0.8, collision_coef=1.0`；后者按每个不安全机对计价。`formation_calibrated` 仅是正式配置的兼容别名，`formation_legacy` 仅供旧半径对照，不参与默认正式实验。几何与可行性证据不等于惩罚系数最优或训练已收敛，报告数值以此配置表和 `docs/env-calibration.md` 为准。
+- Issue #4 后正式朝向默认改为 `heading_mode=dynamic`、阈值改为 `success_dist=0.09`，`formation_legacy` 显式保留 `fixed`、0.05 阈值及旧半径。旧固定朝向的回报、成功率和标定结果不能与新口径混用；新标定清单保存完整配置与实际运行版本。
 
 ## 6. 日志与结果规范（负责人 E）
 

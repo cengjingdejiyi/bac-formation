@@ -68,6 +68,7 @@ def test_configured_radius_heading_and_team_reward(backend):
         n_agents=4,
         formation_radius=0.8,
         heading=0.3,
+        heading_mode="fixed",
         safe_dist=2.0,
         collision_coef=2.5,
     )

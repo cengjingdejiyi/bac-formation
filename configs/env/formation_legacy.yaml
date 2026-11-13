@@ -2,5 +2,7 @@
 extends: formation
 env:
   backend: auto
+  heading_mode: fixed
+  success_dist: 0.05
   obs_radius: 0.5
   comm_radius: 0.4
