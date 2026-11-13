@@ -1,0 +1,5 @@
+# 消融：去门控 / 注意力换均值 / 去信道噪声
+experiment:
+  ablation: [no_gate, mean_agg, no_noise]
+train:
+  total_env_steps: 200000

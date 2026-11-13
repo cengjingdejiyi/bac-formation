@@ -1,0 +1,13 @@
+# 版本口径：六人统一到这一份，安装前先对齐 Python 版本（本机 3.13 已验证）
+# numpy：mpe2 1.1.1 / pettingzoo 1.27.0 只要求 numpy>=1.21 且无上限，2.5.4 实测可用，不必降版本
+numpy>=1.26,<3
+pyyaml>=6.0
+torch>=2.2            # 本机验证 2.15.0+cpu；无 GPU 时用 --index-url https://download.pytorch.org/whl/cpu
+scipy>=1.11           # 槽位匈牙利匹配；缺失时自动退化为贪心
+matplotlib>=3.8       # 作图（E）
+
+# 真实环境（缺省时自动退回内置 mock，仍可跑冒烟）
+mpe2>=1.1
+
+# 开发
+pytest>=8.0

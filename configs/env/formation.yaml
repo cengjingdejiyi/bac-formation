@@ -1,0 +1,20 @@
+# 负责人 B；数值规律见开题报告 3.1「参数原则」
+env:
+  scene: formation          # formation | spread
+  backend: auto             # auto: 有 mpe2 用 mpe2，否则退 mock
+  n_agents: 6
+  max_steps: 100            # T_max
+  formation_radius: 0.5     # r_f
+  obs_radius: 0.5           # R_obs
+  n_obs: 4                  # n_obs
+  comm_radius: 0.4          # R_comm
+  recv_k: 3                 # K
+  safe_dist: 0.2            # d_safe
+  collision_coef: 1.0       # λ_c
+  max_speed: 1.0            # v_max
+  success_dist: 0.05        # δ
+  success_hold: 10          # H
+  end_on_success: false
+  channel:
+    drop_p: [0.0, 0.3]      # 训练时从区间采样
+    flip_p: [0.0, 0.1]

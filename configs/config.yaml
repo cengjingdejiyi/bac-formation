@@ -1,0 +1,7 @@
+# 顶层默认组合；具体数值分散在 env/ algo/ experiment/ 三组
+defaults:
+  env: formation
+  algo: bac
+  experiment: main
+
+seed: 0

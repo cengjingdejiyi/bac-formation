@@ -1,0 +1,6 @@
+# 单因素扫描：L、K、b_max
+experiment:
+  sweep:
+    - {key: algo.msg_bits, values: [2, 4, 8, 16]}
+    - {key: env.recv_k, values: [1, 2, 4]}
+    - {key: algo.budget_bits, values: [1.0, 2.0, 4.0]}

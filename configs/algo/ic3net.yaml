@@ -1,0 +1,10 @@
+# 离散门控 + 连续消息均值聚合（负责人 D）
+algo:
+  name: ic3net
+  comm: ic3net
+  critic: central
+  msg_dim: 32
+  msg_bits: 0              # 由 msg_dim 换算为 32*msg_dim
+  budget_bits: 1e9         # 不设预算
+  beta_init: 0.0
+  beta_lr: 0.0

@@ -1,0 +1,11 @@
+# 主方法：BAC-MAPPO（负责人 A）
+algo:
+  name: bac
+  comm: bac                # none | ic3net | tarmac | bac
+  critic: central          # central | local
+  msg_dim: 8               # 连续消息维度（仅 ic3net/tarmac 用）
+  msg_bits: 4              # L：BAC 每条消息比特数
+  budget_bits: 2.0         # b_max：每机每步允许的平均比特数
+  beta_init: 0.1           # β 初值
+  beta_lr: 0.05            # β 对偶步长
+  r_gate: 0.05             # 发言奖励项系数（与 β 合并计入）

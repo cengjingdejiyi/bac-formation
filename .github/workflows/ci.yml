@@ -1,0 +1,31 @@
+name: ci
+
+# 对应开题报告附录 A.8：合并前 tests 必过
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  smoke-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 安装基础依赖
+        run: |
+          python -m pip install -U pip
+          python -m pip install numpy pyyaml pytest
+
+      - name: 安装 CPU 版 torch
+        run: python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: 契约冒烟（不依赖 mpe2，走 mock 后端）
+        run: python scripts/smoke.py
+
+      - name: 形状与缓存测试
+        run: python -m pytest -q tests

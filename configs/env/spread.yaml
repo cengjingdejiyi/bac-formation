@@ -1,0 +1,16 @@
+# 通用性验证（选做）：simple_spread 协同覆盖
+env:
+  scene: spread
+  backend: auto
+  n_agents: 6
+  max_steps: 100
+  obs_radius: 0.5
+  n_obs: 4
+  comm_radius: 0.4
+  recv_k: 3
+  safe_dist: 0.2
+  collision_coef: 1.0
+  max_speed: 1.0
+  channel:
+    drop_p: [0.0, 0.3]
+    flip_p: [0.0, 0.1]

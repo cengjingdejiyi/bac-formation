@@ -1,0 +1,10 @@
+# 全精度连续广播（负责人 D），本项目的通信性能上界
+algo:
+  name: tarmac
+  comm: tarmac
+  critic: central
+  msg_dim: 32
+  msg_bits: 0
+  budget_bits: 1e9
+  beta_init: 0.0
+  beta_lr: 0.0

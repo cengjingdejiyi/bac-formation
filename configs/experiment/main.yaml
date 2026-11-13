@@ -1,0 +1,15 @@
+# 主实验（负责人 E）
+train:
+  total_env_steps: 200000
+  n_envs: 8
+  rollout_len: 64
+  lr: 3.0e-4
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_eps: 0.2
+  entropy_coef: 0.01
+  ppo_epochs: 4
+  minibatch: 1024
+  hidden: 64
+  eval_every: 10000
+  eval_episodes: 8
