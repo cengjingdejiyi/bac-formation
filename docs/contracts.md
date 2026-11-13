@@ -33,6 +33,16 @@ class FormationCommEnv:
 - 信道参数由环境每回合 reset 时采样（训练从区间采，评估取固定值），经 `info["channel"]` 传给模型。
 - `vec_env` 把 B 个环境堆成 `[B, N, ...]`，回合结束自动 reset，回合级统计留在 `info`。
 
+### B 环境实现补充（2026-11-13）
+
+- `backend=mpe2` 使用 `mpe2.simple_formation_v1.parallel_env` 的真实物理；`auto` 仅在未安装 `mpe2` 时告警退回 mock，安装损坏或接口不匹配须报错。mock 仅用于契约冒烟。
+- 原生观测是 `[速度(2), 绝对位置(2), 地标相对位置(2)]`；包装层从 world 按固定 agent 顺序读取位置/速度，统一组装上述局部观测，不向 Actor 泄漏绝对位置。
+- 中心取唯一 landmark；原生奖励使用动态朝向和距离裁剪，与本契约不同，故统一重算固定 `heading`、可配 `formation_radius` 的槽位误差与安全距离惩罚。`max_speed` 限制速度向量的模长。
+- 完成要求所有匹配距离不超过 `success_dist` 且连续保持 `success_hold` 步；`info.success` 表示当前满足保持条件。回合统计 `ep.success` 记录本回合是否曾完成。
+- 自动 reset 后 obs/state/comm_mask/channel 来自新回合，`reward`、`done`、`ep` 保留刚结束的转移；`info_raw[k].info["terminal_step"]` 保留终止帧（含终止指标和信道），便于评测。后续回合不重新播种，整段运行可复现且初始状态不重复。
+- 单环境和并行环境提供 `close()` 及上下文管理器以释放 MPE2 资源。`scene=spread` 仍是选做扩展，本次不实现；须显式报错，避免误把编队结果当作覆盖实验。
+- 标定脚本和报告见 `scripts/calibrate_env.py`、`docs/env-calibration.md`。现有默认数值保持，标定建议通过单独配置提供，正式采用前按团队流程同步。
+
 ## 3. 模型接口（负责人 C；通信模块 A、D）
 
 四种通信方式实现同一个基类，Actor 只认这个接口：

@@ -39,9 +39,9 @@ raw_env(N: int = 4, max_cycles: int = 25, continuous_actions: bool = False,
 |---|---|---|
 | `env.agents` | `['agent_0' … 'agent_5']` | 按序压成数组即可 |
 | `obs` 单智能体 | `(6,)` float32 | 契约要求 `[N, 4 + 2*n_obs] = (16,)`：MPE2 原版**看不到队友**，邻居槽位必须自己从 `env.unwrapped.world.agents` 的位置算 |
-| obs 前 6 维 | `[vx, vy, ?, ?, ?, ?]` | 需逐维核对语义（速度 / 自身位置 / 地标相对位置），前两维是速度 |
+| obs 前 6 维 | `[vx, vy, px, py, center_x-px, center_y-py]` | 包装层只保留自身速度与中心相对位置，补入局部邻居，不泄漏绝对位置 |
 | `action_space` | `Discrete(5)` | 与契约一致（0 悬停 / 1 左 / 2 右 / 3 下 / 4 上），无需映射 |
-| `reward` | 各智能体相同（共享团队奖励，实测 `-0.7082`） | 契约要求 `[N]` 逐机奖励，需广播后再叠加安全距离惩罚 |
+| `reward` | 各智能体相同（共享团队奖励，实测 `-0.7082`） | 原生使用动态朝向并裁剪距离，不能直接叠加惩罚；按契约重算固定朝向槽位奖励并广播到 `[N]` |
 | `step()` 返回 | 5 元组 `(obs, rew, term, trunc, info)` | PettingZoo 并行接口，照搬 |
 | `info` | 空 dict（实测 `[]`） | 编队误差、碰撞数、完成标记必须我们自己算并塞进 `info` |
 | 地标位置 | 一个中心 landmark（实测 `[0.357, -0.466]` 附近） | 编队中心 `p^c` 用它；报告里 p^c 来源就是这里，不需要另设 |
@@ -54,3 +54,19 @@ raw_env(N: int = 4, max_cycles: int = 25, continuous_actions: bool = False,
 3. `以 MPE2 为唯一物理后端`，mock 只用来跑冒烟：两套后端共用同一份 `EnvStep` 组装代码，避免形状漂移。
 4. 记得 `env.close()`；并行环境中每个 agent 的 `observation_space` 都要断言 shape，早失败比后面对不上强。
 5. 若要做 `simple_spread` 通用性验证，模块名同样是 `simple_spread_v3`（这个有 v3）。
+
+## B 实现落地（2026-11-13）
+
+`src/bacmarl/envs/formation_comm.py` 已接入真实 MPE2，`auto` 同样会运行真实物理。
+两种后端共用 `_obs_step` 与 `metrics.py`，原生动作顺序直接复用，每个 agent 设置 `max_speed`。
+`reset(seed=...)` 同时控制物理与回合信道随机数；后续无 seed reset 延续随机序列。
+环境/并行包装均支持 `close()` 和上下文管理器。
+
+原生物理使用 `dt=0.1`、`damping=0.25`、默认动作力系数 5.0，先推进位置、再更新速度。
+mock 的积分规则不同，仅用于冒烟；禁止将 mock 的控制器参数或训练结果直接当作真实环境结论。
+完成阈值与保持步数在包装层判断，原生 `terminate_on_success` 固定关闭。
+
+完整标定方法、实测结果和推荐配置见 [env-calibration.md](env-calibration.md)。
+
+上游对照：[Farama Simple Formation 文档](https://mpe2.farama.org/main/environments/simple_formation/)、
+[MPE2 v1.1.1 实现](https://github.com/Farama-Foundation/MPE2/blob/v1.1.1/mpe2/simple_formation/simple_formation.py)。

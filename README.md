@@ -8,12 +8,13 @@
 
 ```bash
 pip install -r requirements.txt      # 或 pip install -e ".[dev,env]"
+pip install -e . --no-deps           # 使用 requirements.txt 安装后注册 src 包
 python scripts/smoke.py              # 契约冒烟：不装 torch 也能过
 python -m pytest -q tests            # 形状与缓冲测试
 python -m bacmarl.runners.train env=formation algo=bac env.n_agents=6 algo.msg_bits=4 seed=0
 ```
 
-Windows 没有 make，直接敲上面四条命令即可；macOS/Linux 可用 `make smoke` 等目标。
+Windows 没有 make，直接敲上面的命令即可；macOS/Linux 可用 `make smoke` 等目标。
 
 ## 目录（与开题报告 A.1 一致）
 
@@ -60,9 +61,13 @@ W1 环境+框架+接口冻结 → W2–3 方法跑通 → W4–5 正式实验 �
 | BAC 128 步训练 | `comm/bits ≈ 1.92–2.13`，与 `budget_bits=2.0` 吻合；β 在 0.096–0.102 间摆动（对偶在起作用） |
 | `runners/evaluate.py` | 生成 `robust.csv` |
 
+## B 环境与标定交付（2026-11-13）
+
+- **B 已完成**：真实 MPE2 编队后端、局部邻居/通信掩码、契约奖励与成功判定、批量自动 reset 修复及可复现标定已落地，详见 [B 交付与标定报告](docs/env-calibration.md)。`env=formation_calibrated` 提供候选配置，原默认数值不变。选做的 `simple_spread` 尚未实现，入口会显式报错。
+- 本次 Python 3.14.2 + torch 2.11.0+cpu + MPE2 1.1.1 验收：67 项测试全部通过（无 skip）、契约冒烟通过、120 个标定回合完成、真实后端 BAC 128 步训练与 checkpoint 评测通过。短训练只验证接口，不代表策略已收敛。
+
 ## 已知缺口（按负责人认领）
 
-- **B**：`backend="mpe2"` 仅留适配位并显式抛 `NotImplementedError`。入口与实测形状已写在 `docs/mpe2-notes.md`（`mpe2.simple_formation_v1`：obs 单机 6 维、无队友观测、`Discrete(5)`、共享奖励、`info` 为空、地标即编队中心），照着对齐即可。
 - **C**：PPO 目前按单步分段更新（缓存的 `h_prev` 逐帧传入，不做全轨迹 BPTT）；需要真实梯度截断时才扩展为分段 BPTT。
 - **D**：`baselines/qmix_benchmarl/` 只有接入说明，QMIX 尚未落地。
 - **E**：`scripts/make_figures.py` 读的是 `results/*/metrics.csv`，正式实验要在 `configs/experiment/main.yaml` 里补齐多 seed 矩阵后才能出统计图。
