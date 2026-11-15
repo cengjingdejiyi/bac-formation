@@ -11,7 +11,7 @@ _LAZY = {
     "RolloutBuffer": ".buffer",
     "BetaDual": ".dual",
     "ppo_update": ".mappo",
-    "gae": ".mappo",
+    "compute_gae": ".gae",
 }
 __all__ = sorted(_LAZY)
 

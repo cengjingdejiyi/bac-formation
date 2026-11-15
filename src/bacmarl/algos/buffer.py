@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from .gae import compute_gae
+
 
 class RolloutBuffer:
     def __init__(self, t_max: int, b: int, n: int, obs_dim: int, n_obs: int,
@@ -51,15 +53,12 @@ class RolloutBuffer:
 
     def compute_returns(self, shaped_reward: np.ndarray, last_value: np.ndarray,
                         gamma: float, lam: float) -> None:
-        """GAE：shaped_reward [T,B,N]，last_value [B,N]。"""
-        gae_ = np.zeros((self.B, self.N), dtype=np.float32)
-        for t in reversed(range(self.ptr)):
-            next_v = last_value if t == self.ptr - 1 else self.value[t + 1]
-            nonterm = 1.0 - self.done[t].astype(np.float32)[:, None]
-            delta = shaped_reward[t] + gamma * next_v * nonterm - self.value[t]
-            gae_ = delta + gamma * lam * nonterm * gae_
-            self.adv[t] = gae_
-            self.ret[t] = gae_ + self.value[t]
+        """GAE：shaped_reward [T,B,N]，last_value [B,N]，只填已写入的前 ptr 步。"""
+        adv, ret = compute_gae(
+            shaped_reward, self.value, self.done, gamma, lam, last_value, n_steps=self.ptr
+        )
+        self.adv[: self.ptr] = adv[: self.ptr]
+        self.ret[: self.ptr] = ret[: self.ptr]
 
     def batched(self, idx: np.ndarray) -> dict:
         """按扁平索引 (t, b) 取小批量。"""
@@ -68,7 +67,7 @@ class RolloutBuffer:
             'obs': self.obs[t, b], 'obs_mask': self.obs_mask[t, b], 'state': self.state[t, b],
             'comm_mask': self.comm_mask[t, b], 'h_prev': self.h_prev[t, b],
             'action': self.action[t, b], 'gate': self.gate[t, b], 'logp_old': self.logp_old[t, b],
-            'adv': self.adv[t, b], 'ret': self.ret[t, b],
+            'adv': self.adv[t, b], 'ret': self.ret[t, b], 'value': self.value[t, b],
             'noise_drop': self.noise_drop[t, b], 'noise_flip': self.noise_flip[t, b],
         }
 

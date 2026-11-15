@@ -103,6 +103,9 @@ class Critic(nn.Module):
 - 缓存第 t 项是 `(obs_t, h_prev_t, action_t, gate_t, reward_{t+1}, done_{t+1})`：先从当前观测决策，再 step，最后把这次 step 的 reward/done 与**动作前**的观测一起写入缓存。终止帧只用于诊断，不能替代动作前的观测。
 - rollout 段之间保留环境状态与循环隐状态；仅真正 done 的环境自动 reset，并在下一动作前清零对应隐状态。`done[t]` 同时切断 GAE 自举与跨回合优势传播；未终止段末使用最新 next state 的 value 自举。
 - β 用 `bits.mean()`（所有 T、B、N 的均值）更新；一次广播不按接收边数重复收费，丢包也不退款。
+- GAE 只有一份实现：`bacmarl.algos.gae.compute_gae`（numpy），`RolloutBuffer.compute_returns` 调用它；不允许再出现第二份 GAE。
+- PPO 更新：优势在**整轮更新**上归一化（`train.norm_adv`），不逐小批量归一化。`train.reward_norm` 打开时，shaped reward 按 Welford 滑动标准差缩放（只缩小不放大），价值目标与自举同尺度，不改变最优策略；原始回合回报仍按 env 返回值写日志与评测。`train.value_clip_eps` 是可选的 PPO 式价值裁断（相对采样期 `v_old`），`null` 即关闭——奖励尺度未归一化时不要开，否则价值学习会被 0.2 的绝对窗宽卡死。日志补 `ppo/approx_kl`、`ppo/clip_frac`、`ppo/value_clip_frac`、`ppo/adv_std`、`train/reward_scale`，损失按小批量取平均而非取最后一批。
+- 训练内评测：每 `train.eval_every` 个 `env_steps` 跑一次确定性评测（动作 argmax、门控取 p≥0.5、每回合零隐状态、回合内不重置），跑 `train.eval_episodes` 个回合。评测信道取**固定值**：默认是 `env.channel` 训练采样区间的中点，可用 `train.eval_drop_p` / `train.eval_flip_p` 覆盖；不得用训练期的逐环境采样区间评测。指标以 `eval/return`、`eval/success_rate`、`eval/formation_err`、`eval/collisions`、`eval/length`、`eval/bits`、`eval/speak_rate` 写入 `metrics.csv`，未评测的行写 `nan` 以保证表头稳定；同时落盘 `ckpt/step_{env_steps}.ckpt`。
 
 ## 5. 配置规范（负责人 C；数值由 B 标定后填写）
 

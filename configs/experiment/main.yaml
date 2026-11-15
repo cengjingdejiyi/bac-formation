@@ -7,9 +7,13 @@ train:
   gamma: 0.99
   gae_lambda: 0.95
   clip_eps: 0.2
+  norm_adv: true           # 优势在整轮更新上归一化（不是逐小批量）
+  reward_norm: true        # shaped reward 按滑动标准差缩放；最优策略不变，价值目标降到 O(1)
+  value_clip_eps: null     # 可选：价值目标相对 v_old 的裁断；配 reward_norm 才合适，留空即关闭
   entropy_coef: 0.01
   ppo_epochs: 4
   minibatch: 1024
   hidden: 64
-  eval_every: 10000
+  eval_every: 10000        # 每多少 env_steps 跑一次确定性评测并存周期 ckpt
   eval_episodes: 8
+  # eval_drop_p / eval_flip_p 省略时取 env.channel 训练采样区间的中点

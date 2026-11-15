@@ -8,7 +8,7 @@ import torch
 from torch.nn.functional import one_hot
 
 from bacmarl.algos.buffer import RolloutBuffer
-from bacmarl.algos.mappo import gae
+from bacmarl.algos.gae import compute_gae
 from bacmarl.comm.base import build_comm
 from bacmarl.comm.channel import ChannelNoise
 from bacmarl.envs import EnvConfig, VecFormationEnv
@@ -203,7 +203,9 @@ def test_gae_hand_calculated_terminal_boundaries_do_not_cross_episodes():
     last = np.array([[999]], dtype=np.float32)
     buf.compute_returns(buf.reward_team, last, gamma=0.9, lam=1.0)
     np.testing.assert_allclose(buf.ret[:, 0, 0], [2.8, 2, 28, 20], atol=1e-5)
-    adv, ret = gae(buf.reward_team, buf.value, buf.done, 0.9, 1.0, last)
+    adv, ret = compute_gae(
+        buf.reward_team, buf.value, buf.done, 0.9, 1.0, last, n_steps=buf.ptr
+    )
     np.testing.assert_allclose(buf.ret, ret, atol=1e-5)
     np.testing.assert_allclose(buf.adv, adv, atol=1e-5)
 

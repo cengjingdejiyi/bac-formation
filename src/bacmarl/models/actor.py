@@ -40,7 +40,7 @@ class Actor(nn.Module):
         return torch.zeros(b, n, self.hidden, device=device)
 
     def forward(self, obs, obs_mask, comm_mask, h_prev, channel,
-                gate=None, noise=None) -> ActorOut:
+                gate=None, noise=None, deterministic: bool = False) -> ActorOut:
         b, n, _ = obs.shape
         x = self.encoder(obs, obs_mask).reshape(b * n, self.hidden)
         h = self.gru(x, h_prev.reshape(b * n, self.hidden)).reshape(b, n, self.hidden)
@@ -49,7 +49,12 @@ class Actor(nn.Module):
         if self.gate_head is not None:
             gate_logits = self.gate_head(h).squeeze(-1)
             if gate is None:
-                gate = Bernoulli(logits=gate_logits).sample()
+                # 评测走确定性策略：门控取 p>=0.5，采样期仍按 Bernoulli 采样。
+                gate = (
+                    (gate_logits > 0).to(torch.float32)
+                    if deterministic
+                    else Bernoulli(logits=gate_logits).sample()
+                )
         else:
             gate = torch.ones((b, n), dtype=torch.float32, device=h.device)
 

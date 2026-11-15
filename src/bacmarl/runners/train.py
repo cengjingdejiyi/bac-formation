@@ -21,10 +21,33 @@ from bacmarl.algos.mappo import ppo_update  # noqa: E402
 from bacmarl.comm.base import build_comm  # noqa: E402
 from bacmarl.envs.formation_comm import EnvConfig  # noqa: E402
 from bacmarl.envs.vec_env import VecFormationEnv  # noqa: E402
+from bacmarl.runners.evaluate import _METRIC_KEYS, evaluate_policy  # noqa: E402
 from bacmarl.runners.rollout import collect_rollout  # noqa: E402
+from bacmarl.utils.checkpoint import save_checkpoint  # noqa: E402
 from bacmarl.utils.config import load_config  # noqa: E402
 from bacmarl.utils.logger import RunLogger  # noqa: E402
+from bacmarl.utils.normalizer import RunningStd  # noqa: E402
 from bacmarl.utils.seeding import set_seed  # noqa: E402
+
+_EVAL_KEYS = _METRIC_KEYS
+
+
+def _eval_channel(env_dict: dict, train_cfg: dict) -> dict:
+    """评测信道取固定值：优先 train.eval_drop_p/eval_flip_p，否则取训练区间中点。"""
+    channel = env_dict.get("channel") or {}
+
+    def fixed(key: str, override: str) -> float:
+        if train_cfg.get(override) is not None:
+            return float(train_cfg[override])
+        value = channel.get(key, 0.0)
+        if isinstance(value, (list, tuple)):
+            return float(0.5 * (float(value[0]) + float(value[-1])))
+        return float(value)
+
+    return {
+        "drop_p": fixed("drop_p", "eval_drop_p"),
+        "flip_p": fixed("flip_p", "eval_flip_p"),
+    }
 
 
 def run_name(cfg: dict) -> str:
@@ -103,6 +126,16 @@ def _train(cfg: dict, vec: VecFormationEnv, torch) -> int:
     logger = RunLogger(run_dir)
     _dump_yaml(cfg, run_dir / "config.yaml")
 
+    # 训练内评测：信道取固定值（训练区间中点，可由 train.eval_drop_p/eval_flip_p 覆盖）。
+    eval_every = int(tr.get("eval_every", 0) or 0)
+    eval_episodes = int(tr.get("eval_episodes", 8))
+    eval_cfg = (
+        EnvConfig.from_dict({**cfg["env"], "channel": _eval_channel(cfg["env"], tr)})
+        if eval_every > 0
+        else None
+    )
+    next_eval = eval_every
+
     try:
         steps, total = 0, int(tr["total_env_steps"])
         rollout_len = int(tr["rollout_len"])
@@ -115,6 +148,8 @@ def _train(cfg: dict, vec: VecFormationEnv, torch) -> int:
         h = actor.init_hidden(b, n)
         recent_episodes = []
         episode_count = 0
+        # 奖励尺度归一化：只缩放训练用的 shaped reward，价值目标与自举同尺度。
+        scaler = RunningStd() if tr.get("reward_norm", True) else None
         while steps < total:
             length = min(rollout_len, (total - steps + b - 1) // b)
             buf = RolloutBuffer(
@@ -131,6 +166,9 @@ def _train(cfg: dict, vec: VecFormationEnv, torch) -> int:
             batch, h = rollout.batch, rollout.hidden
             steps += buf.ptr * b
             shaped_all = buf.reward_team - dual.beta * buf.bits
+            if scaler is not None:
+                scaler.update(shaped_all)
+                shaped_all = shaped_all * scaler.scale()
             buf.compute_returns(
                 shaped_all,
                 rollout.last_value,
@@ -153,6 +191,23 @@ def _train(cfg: dict, vec: VecFormationEnv, torch) -> int:
                     else float("nan")
                 )
 
+            if eval_every > 0 and steps >= next_eval and eval_cfg is not None:
+                was_training = actor.training
+                actor.eval()
+                eval_metrics = evaluate_policy(
+                    actor, eval_cfg, episodes=eval_episodes, seed=int(cfg["seed"])
+                )
+                actor.train(was_training)
+                next_eval = steps + eval_every
+                ckpt_path = run_dir / "ckpt" / f"step_{steps}.ckpt"
+                save_checkpoint(
+                    ckpt_path, actor, critic, meta={"cfg": cfg, "steps": steps}
+                )
+                print(f"[INFO] eval@{steps} {eval_metrics} -> {ckpt_path.name}")
+            else:
+                # 字段始终存在，CSV 表头才不会被首行定型后丢掉 eval 列。
+                eval_metrics = {k: float("nan") for k in _EVAL_KEYS}
+
             logger.log(
                 {
                     "train/return": episode_mean("ret"),
@@ -162,15 +217,15 @@ def _train(cfg: dict, vec: VecFormationEnv, torch) -> int:
                     "train/episode_length": episode_mean("len"),
                     "train/episodes": episode_count,
                     "train/step_reward": float(buf.reward_team.mean()),
+                    "train/reward_scale": float(scaler.scale()) if scaler else 1.0,
                     "comm/bits": float(buf.bits.mean()),
                     "comm/speak_rate": float(buf.gate.mean()),
                     "comm/beta": beta,
+                    **{f"eval/{k}": v for k, v in eval_metrics.items()},
                     **logs,
                 },
                 steps,
             )
-        from bacmarl.utils.checkpoint import save_checkpoint
-
         save_checkpoint(
             run_dir / "ckpt" / "last.ckpt",
             actor,

@@ -7,4 +7,5 @@ results/
 runs/
 *.ckpt
 *.pt
+pytest-of-*/
 .DS_Store
