@@ -23,7 +23,7 @@ from bacmarl.envs.formation_comm import EnvConfig  # noqa: E402
 from bacmarl.envs.vec_env import VecFormationEnv  # noqa: E402
 from bacmarl.runners.evaluate import _METRIC_KEYS, evaluate_policy  # noqa: E402
 from bacmarl.runners.rollout import collect_rollout  # noqa: E402
-from bacmarl.utils.checkpoint import save_checkpoint  # noqa: E402
+from bacmarl.utils.checkpoint import load_checkpoint, save_checkpoint  # noqa: E402
 from bacmarl.utils.config import load_config  # noqa: E402
 from bacmarl.utils.logger import RunLogger  # noqa: E402
 from bacmarl.utils.normalizer import RunningStd  # noqa: E402
@@ -58,6 +58,32 @@ def run_name(cfg: dict) -> str:
         f"_L{a.get('msg_bits', 0)}_K{e.get('recv_k', 1)}_B{a.get('budget_bits', 0)}"
         f"_s{cfg['seed']}"
     )
+
+
+def _restore_run(tr: dict, actor, critic, opt, dual, scaler) -> int:
+    """按 `train.resume_from` 恢复权重、优化器、β 与奖励缩放统计，返回起始步数。
+
+    β 是唯一的对偶状态（`meta["beta"]`），不恢复它会让续训后的预算约束断档；
+    优化器与 Welford 统计同理，缺了它们只能算「换权重接着跑」，不是续训。
+    回合级日志窗口（recent_episodes / episode_count）不恢复，只影响曲线开头的平滑。
+    """
+    resume = tr.get("resume_from")
+    if not resume:
+        return 0
+    path = Path(str(resume))
+    if not path.is_absolute():
+        path = ROOT / path
+    if not path.exists():
+        raise ValueError(f"resume_from 指向的 checkpoint 不存在：{path}")
+    ckpt = load_checkpoint(path, actor, critic, optimizer=opt)
+    meta = ckpt.get("meta") or {}
+    if "beta" in meta:
+        dual.load_state_dict({"beta": meta["beta"]})
+    if scaler is not None and "scaler" in ckpt:
+        scaler.load_state_dict(ckpt["scaler"])
+    steps = int(meta.get("steps", 0))
+    print(f"[INFO] resumed {path.name}: steps={steps} beta={dual.beta:.3f}")
+    return steps
 
 
 def _dump_yaml(cfg: dict, path: Path) -> None:
@@ -135,13 +161,20 @@ def _train(cfg: dict, vec: VecFormationEnv, torch) -> int:
         if eval_every > 0
         else None
     )
-    next_eval = eval_every
+    # 奖励尺度归一化：只缩放训练用的 shaped reward，价值目标与自举同尺度。
+    scaler = RunningStd() if tr.get("reward_norm", True) else None
+    start_steps = _restore_run(tr, actor, critic, opt, dual, scaler)
 
     try:
-        steps, total = 0, int(tr["total_env_steps"])
+        steps, total = start_steps, int(tr["total_env_steps"])
         rollout_len = int(tr["rollout_len"])
         if total < 1 or rollout_len < 1:
             raise ValueError("total_env_steps and rollout_len must be positive")
+        if steps >= total:
+            print(f"[WARN] resume 起点 {steps} >= total_env_steps={total}，本次不训练")
+            return 0
+        # 续训时不能把评测计时器从 0 重新数，否则会立刻多跑一次评测。
+        next_eval = ((steps // eval_every) + 1) * eval_every if eval_every > 0 else 0
         print(
             f'[INFO] run_dir={run_dir}\n[INFO] comm={cfg["algo"]["comm"]} N={n} B={b} hidden={hidden} backend={vec.envs[0].backend}'
         )
@@ -149,8 +182,6 @@ def _train(cfg: dict, vec: VecFormationEnv, torch) -> int:
         h = actor.init_hidden(b, n)
         recent_episodes = []
         episode_count = 0
-        # 奖励尺度归一化：只缩放训练用的 shaped reward，价值目标与自举同尺度。
-        scaler = RunningStd() if tr.get("reward_norm", True) else None
         while steps < total:
             length = min(rollout_len, (total - steps + b - 1) // b)
             buf = RolloutBuffer(
@@ -206,6 +237,8 @@ def _train(cfg: dict, vec: VecFormationEnv, torch) -> int:
                     actor,
                     critic,
                     meta={"cfg": cfg, "steps": steps, "beta": dual.beta},
+                    optimizer=opt,
+                    extra={"scaler": scaler.state_dict()} if scaler else None,
                 )
                 print(f"[INFO] eval@{steps} {eval_metrics} -> {ckpt_path.name}")
             else:
@@ -235,6 +268,8 @@ def _train(cfg: dict, vec: VecFormationEnv, torch) -> int:
             actor,
             critic,
             meta={"cfg": cfg, "steps": steps, "beta": dual.beta},
+            optimizer=opt,
+            extra={"scaler": scaler.state_dict()} if scaler else None,
         )
         print(f"[DONE] steps={steps} beta={dual.beta:.3f} csv={logger.csv_path}")
     finally:

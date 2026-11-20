@@ -42,3 +42,19 @@ class RunningStd:
     def scale(self, min_std: float = 1.0) -> float:
         """缩放系数 = 1/std，但只做缩小不做放大，避免小奖励被放大成爆炸值。"""
         return 1.0 / max(self.std, float(min_std))
+
+    def state_dict(self) -> dict:
+        """续训用：Welford 三件套即可复原，eps 一并带上保持口径不变。"""
+        return {
+            "n": int(self.n),
+            "mean": float(self.mean),
+            "m2": float(self.m2),
+            "eps": float(self.eps),
+        }
+
+    def load_state_dict(self, state: dict) -> "RunningStd":
+        self.n = int(state.get("n", 0))
+        self.mean = float(state.get("mean", 0.0))
+        self.m2 = float(state.get("m2", 0.0))
+        self.eps = float(state.get("eps", self.eps))
+        return self

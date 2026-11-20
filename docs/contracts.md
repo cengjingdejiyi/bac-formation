@@ -107,6 +107,7 @@ class Critic(nn.Module):
 
 - 训练奖励在缓存中合成：`r_i = reward_team - β·bits_i`，β 取采样时的值。
 - 每轮迭代顺序：采样 → 合成奖励 → GAE → PPO 多轮小批量更新 → 用本轮比特均值更新 β → 记录日志 → 定期评估与保存。
+- 断点续训：`train.resume_from=<ckpt>` 恢复 actor/critic 权重、优化器动量、β（`meta["beta"]`）与奖励缩放统计（Welford 的 n/mean/m2），并从 `meta["steps"]` 接着计数；评测计时器按起始步对齐，回合级日志窗口（`recent_episodes`）不恢复。β 是唯一的对偶状态，丢了她等于换了预算口径，所以必须随 ckpt 存取。
 - 统一入口：`python -m bacmarl.runners.train env=formation algo=bac env.n_agents=6 algo.msg_bits=4 seed=0`
 - 缓存第 t 项是 `(obs_t, h_prev_t, action_t, gate_t, reward_{t+1}, done_{t+1})`：先从当前观测决策，再 step，最后把这次 step 的 reward/done 与**动作前**的观测一起写入缓存。终止帧只用于诊断，不能替代动作前的观测。
 - rollout 段之间保留环境状态与循环隐状态；仅真正 done 的环境自动 reset，并在下一动作前清零对应隐状态。`done[t]` 同时切断 GAE 自举与跨回合优势传播；未终止段末使用最新 next state 的 value 自举。
