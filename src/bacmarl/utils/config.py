@@ -73,19 +73,25 @@ def _set_path(d: dict, path: str, value) -> None:
 
 
 def _parse_scalar(v: str):
-    low = v.lower()
+    text = v.strip()
+    low = text.lower()
     if low in ("true", "false"):
         return low == "true"
     if low in ("none", "null"):
         return None
+    # 列表既支持 [a,b] 也支持逗号分隔（丢包网格这类逐元素配置必须能走 CLI）
+    if (text.startswith("[") and text.endswith("]")) or "," in text:
+        inner = text[1:-1] if text.startswith("[") and text.endswith("]") else text
+        items = [p.strip() for p in inner.split(",") if p.strip()]
+        return [_parse_scalar(p) for p in items]
     try:
-        return int(v)
+        return int(text)
     except ValueError:
         pass
     try:
-        return float(v)
+        return float(text)
     except ValueError:
-        return v
+        return text
 
 
 def apply_overrides(cfg: dict, tokens: list[str]) -> dict:

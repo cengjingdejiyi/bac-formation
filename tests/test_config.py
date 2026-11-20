@@ -59,3 +59,24 @@ def test_inheritance_cycle_is_rejected(tmp_path):
     (tmp_path / "env" / "second.yaml").write_text("extends: first\n")
     with pytest.raises(ValueError, match="cyclic"):
         load_config([], config_dir=tmp_path)
+
+
+@pytest.mark.parametrize("name", ["ablation", "sweep", "robust"])
+def test_experiment_groups_inherit_main_train_block(name):
+    """切 experiment 分组不得清空 train：否则 train.py 第一处 tr["lr"] 就 KeyError。"""
+    base = load_config([])
+    cfg = load_config([f"experiment={name}"])
+    assert cfg["train"] == base["train"]
+    assert float(cfg["train"]["lr"]) == float(base["train"]["lr"])
+
+
+def test_robustness_group_carries_drop_grid():
+    grid = load_config(["experiment=robust"])["experiment"]["robustness"]["drop_p"]
+    assert grid == [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
+    assert [float(v) for v in grid] == grid
+
+
+@pytest.mark.parametrize("token", ["[0.0,0.3]", "0.0,0.3"])
+def test_cli_override_parses_list(token):
+    cfg = load_config([f"experiment.robustness.drop_p={token}"])
+    assert cfg["experiment"]["robustness"]["drop_p"] == [0.0, 0.3]

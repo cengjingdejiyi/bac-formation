@@ -6,7 +6,7 @@
 #   no_noise  : env.channel.drop_p=0 env.channel.flip_p=0
 #                （评测信道要单独显式给值，否则会跟着训练区间一起变成 0：
 #                 train.eval_drop_p=<原中点> train.eval_flip_p=<原中点>）
+# 训练超参全部继承 main.yaml，本文件只声明消融矩阵，不维护第二套数值。
+extends: main
 experiment:
   ablation: [no_gate, mean_agg, no_noise]
-train:
-  total_env_steps: 200000
