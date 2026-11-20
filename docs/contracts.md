@@ -82,6 +82,14 @@ class Critic(nn.Module):
 - 只有半径/容量掩码允许、发送者 gate=1 且未丢包的边参与归一化。无有效邻居时权重与通信上下文均为 0；注意力不能越过输入掩码。
 - `channel.drop_p/flip_p` 支持标量或逐并行环境 `[B]` 参数；不得把不同环境的信道概率取均值后使用。PPO 更新复用存储的噪声。
 
+### BAC 变体与 β 对偶（负责人 A，2026-11-20）
+
+- `algo.aggregate`：`softmax`（默认，q/k 注意力）或 `mean`（消融 `mean_agg`，只在可见边上做均匀平均）。`mean` 模式下 `attn` 是「可见权重」而不是注意力，`w_q/w_k` 仍保留参数以保持两版同构，但不参与计算、梯度为 0。
+- `algo.use_gate=false`（消融 `no_gate`）：`CommBAC.has_gate=False`，Actor 因此不建门控头、gate 恒为 1、`bits` 恒等于 `msg_bits`。此时 β 对偶只能推着常数预算走，结果只作对照，不能当成「学会按需发言」。
+- 去信道噪声（消融 `no_noise`）是配置项：`env.channel.drop_p=0 env.channel.flip_p=0`。评测信道取「训练区间中点」，训练区间归零后必须显式写 `train.eval_drop_p` / `train.eval_flip_p`，否则评测也在零噪声下跑，鲁棒性无从比较。
+- β 更新口径：`β ← clamp(β + η(b̂ − b_max), 0, β_max)`，η = `algo.beta_lr`，`β_max` = `algo.beta_max`（默认 5.0）；b̂ 为所有 T、B、N 的 `bits.mean()`，一轮更新一次；b̂ 非有限时跳过。训练奖励只合成 `r = reward_team - β·bits`，不再有单独的发言奖励系数（旧 `algo.r_gate` 已删除）。
+- β 属对偶状态：`BetaDual.state_dict()` 写进 checkpoint 的 `meta["beta"]` 以便续训对齐；actor/critic 权重之外的对偶变量不能丢。
+
 ## 4. 训练接口（负责人 C）
 
 | 缓存字段 | 形状 | 说明 |

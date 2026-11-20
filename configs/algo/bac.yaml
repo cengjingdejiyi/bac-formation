@@ -8,4 +8,6 @@ algo:
   budget_bits: 2.0         # b_max：每机每步允许的平均比特数
   beta_init: 0.1           # β 初值
   beta_lr: 0.05            # β 对偶步长
-  r_gate: 0.05             # 发言奖励项系数（与 β 合并计入）
+  beta_max: 5.0            # β 上界：预算极紧时防止对偶变量发散
+  aggregate: softmax       # softmax（默认）| mean（消融 mean_agg：均匀平均）
+  use_gate: true           # false 即消融 no_gate：不建门控头，bits 恒为 L

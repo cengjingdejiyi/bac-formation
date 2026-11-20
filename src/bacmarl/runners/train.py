@@ -119,6 +119,7 @@ def _train(cfg: dict, vec: VecFormationEnv, torch) -> int:
         beta=float(cfg["algo"].get("beta_init", 0.0)),
         lr=float(cfg["algo"].get("beta_lr", 0.0)),
         b_max=float(cfg["algo"].get("budget_bits", 0.0)),
+        beta_max=float(cfg["algo"].get("beta_max", 5.0)),
     )
 
     exp_name = (cfg.get("experiment") or {}).get("name", "main")
@@ -201,7 +202,10 @@ def _train(cfg: dict, vec: VecFormationEnv, torch) -> int:
                 next_eval = steps + eval_every
                 ckpt_path = run_dir / "ckpt" / f"step_{steps}.ckpt"
                 save_checkpoint(
-                    ckpt_path, actor, critic, meta={"cfg": cfg, "steps": steps}
+                    ckpt_path,
+                    actor,
+                    critic,
+                    meta={"cfg": cfg, "steps": steps, "beta": dual.beta},
                 )
                 print(f"[INFO] eval@{steps} {eval_metrics} -> {ckpt_path.name}")
             else:
@@ -230,7 +234,7 @@ def _train(cfg: dict, vec: VecFormationEnv, torch) -> int:
             run_dir / "ckpt" / "last.ckpt",
             actor,
             critic,
-            meta={"cfg": cfg, "steps": steps},
+            meta={"cfg": cfg, "steps": steps, "beta": dual.beta},
         )
         print(f"[DONE] steps={steps} beta={dual.beta:.3f} csv={logger.csv_path}")
     finally:

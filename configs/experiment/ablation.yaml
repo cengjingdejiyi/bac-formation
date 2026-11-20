@@ -1,4 +1,11 @@
 # 消融：去门控 / 注意力换均值 / 去信道噪声
+# 三组都用同一份训练入口，只换 BAC 提供的开关；正式实验的口径见 docs/contracts.md 第 3 节。
+#   no_gate   : algo.use_gate=false algo.beta_lr=0
+#               （没有门控可调，β 只会在常数比特 L 上单调爬升，故对偶步长置 0）
+#   mean_agg  : algo.aggregate=mean
+#   no_noise  : env.channel.drop_p=0 env.channel.flip_p=0
+#                （评测信道要单独显式给值，否则会跟着训练区间一起变成 0：
+#                 train.eval_drop_p=<原中点> train.eval_flip_p=<原中点>）
 experiment:
   ablation: [no_gate, mean_agg, no_noise]
 train:

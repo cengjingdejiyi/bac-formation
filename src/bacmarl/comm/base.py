@@ -70,10 +70,15 @@ def build_comm(name: str, hidden: int, cfg: dict | None = None) -> CommModule:
     if name not in COMM_REGISTRY:
         raise KeyError(f"未知通信方式 {name}，可选：{sorted(COMM_REGISTRY)}")
     cls = COMM_REGISTRY[name]
-    return cls(
+    kwargs = dict(
         hidden=hidden,
         msg_dim=int(cfg.get("msg_dim", 8)),
         msg_bits=int(cfg.get("msg_bits", 4)),
         recv_k=int(cfg.get("recv_k", 3)),
         hidden_dim=hidden,
     )
+    if name == "bac":
+        # 消融开关只作用于主方法；D 的两条基线保持各自结构，避免公平性被改坏。
+        kwargs["aggregate"] = str(cfg.get("aggregate", "softmax"))
+        kwargs["use_gate"] = bool(cfg.get("use_gate", True))
+    return cls(**kwargs)
