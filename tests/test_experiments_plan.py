@@ -120,3 +120,35 @@ def test_run_name_matches_train_module(overrides):
     tokens = ["env=formation", "algo=bac", "seed=7", *overrides]
     cfg = load_config(tokens)
     assert rx.run_name(cfg) == tr.run_name(cfg)
+
+
+@pytest.mark.parametrize("algo", ["bac", "mappo", "ippo", "ic3net", "tarmac", "qmix"])
+def test_run_name_matches_training_entry_for_every_algo(algo):
+    """#11 之后每个算法都必须对得上；连续消息的 L/B 段是这次修的重点。"""
+    pytest.importorskip("torch")
+    from bacmarl.utils.config import load_config
+
+    from bacmarl.runners import qmix as qmix_runner
+    from bacmarl.runners import train as train_runner
+
+    cfg = load_config([f"algo={algo}", "seed=3"])
+    expected = qmix_runner.run_name(cfg) if algo == "qmix" else train_runner.run_name(cfg)
+    assert rx.run_name(cfg) == expected
+    # 名字里的 L 必须是通信模块口径：连续消息 1024，无通信 0
+    if algo in ("ic3net", "tarmac"):
+        assert "_L1024_" in expected and "L0_" not in expected
+    elif algo in ("mappo", "ippo", "qmix"):
+        assert "_L0_" in expected
+
+
+def test_plan_directories_match_training_run_name_for_continuous_baselines():
+    """排班算出的 run_dir 必须与训练实际写盘的名字一致（否则结果会落进两处）。"""
+    jobs = rx.plan(["main"], seeds=[0])
+    assert jobs
+    from bacmarl.utils.config import load_config
+
+    for algo in ("ic3net", "tarmac"):
+        cfg = load_config(["algo=" + algo, "seed=0"])
+        assert rx.run_name(cfg).endswith("_L1024_K3_Binf_s0")
+        assert "B1000000000" not in rx.run_name(cfg)
+

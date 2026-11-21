@@ -3,10 +3,12 @@
 契约依据 `docs/contracts.md` 第 6 节（运行名与结果目录规范）。本脚本只做「排班」：
 展开 seeds × 配置 → 生成命令 → 检查撞名 → 写清单 → 可选执行；
 不改 train / evaluate 的任何语义，也不复制它们内部的逻辑。
+运行名直接取 `bacmarl.utils.naming.run_name`（Issue #11 之后命名只有这一份实现），
+排班算出的目录名与训练实际写盘的名字不可能再分叉。
 
-三个必须挡住的坑（都在脚本里处理）：
+四个必须挡住的坑（都在脚本里处理）：
 1. `run_name` 不含 aggregate/use_gate/信道，消融变体彼此同名 → 依赖 #12 的变体后缀
-   （`_aggmean` / `_nogate` / `_nonoise`）区分，本脚本按同一口径计算名字并再查一遍撞名。
+   （`_aggmean` / `_nogate` / `_nonoise`）区分，本脚本复用同一份命名实现并再查一遍撞名。
 2. `no_noise` 把训练信道归零后，评测信道会跟着变 0，鲁棒性失去对照
    → 自动补 `train.eval_drop_p/eval_flip_p` = 训练区间中点。
 3. 单因素扫描的基线值与其它轴算出的名字相同 → 默认跳过基线点（由 main 组提供）。
@@ -33,6 +35,7 @@ if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
 from bacmarl.utils.config import load_config  # noqa: E402
+from bacmarl.utils.naming import run_name  # noqa: E402  (Issue #11：命名只留一份实现)
 
 PLAN_COLUMNS = (
     "group",
@@ -51,53 +54,6 @@ _LEGACY_OVERRIDES = {
     "mean_agg": {"algo.aggregate": "mean"},
     "no_noise": {"env.channel.drop_p": 0.0, "env.channel.flip_p": 0.0},
 }
-
-
-def _channel_off(value) -> bool:
-    """标量 0 视为关闭信道；训练区间 [a, b] 不算（与 train._channel_off 同口径）。"""
-    try:
-        return float(value) == 0.0
-    except (TypeError, ValueError):
-        return False
-
-
-def _variant_suffix(cfg: dict) -> str:
-    """消融变体短后缀，与 `train._variant_suffix` 同口径（contracts 第 6 节）。
-
-    默认配置返回空串，既有目录名不受影响；消融只改 aggregate / use_gate / 信道，
-    运行名主体字段全同，不加后缀就会写进同一个目录。
-    """
-    a, e = cfg.get("algo") or {}, cfg.get("env") or {}
-    parts = []
-    aggregate = str(a.get("aggregate", "softmax"))
-    if aggregate != "softmax":
-        parts.append(f"agg{aggregate}")
-    if a.get("use_gate", True) is not True:
-        parts.append("nogate")
-    channel = e.get("channel") or {}
-    drop_off = _channel_off(channel.get("drop_p", 0.0))
-    flip_off = _channel_off(channel.get("flip_p", 0.0))
-    if drop_off and flip_off:
-        parts.append("nonoise")
-    elif drop_off:
-        parts.append("drop0")
-    elif flip_off:
-        parts.append("flip0")
-    return ("_" + "-".join(parts)) if parts else ""
-
-
-def run_name(cfg: dict) -> str:
-    """与 `bacmarl.runners.train.run_name` 同一口径（契约第 6 节）。
-
-    这里不 import train：它会把 torch 拉进来，排班不该依赖训练依赖。
-    两者一致性由 `tests/test_experiments_plan.py` 在有 torch 的环境下对照（CI 会跑）。
-    """
-    e, a = cfg["env"], cfg["algo"]
-    return (
-        f"{e.get('scene', 'formation')}_{e['n_agents']}n_{a.get('name', a['comm'])}"
-        f"_L{a.get('msg_bits', 0)}_K{e.get('recv_k', 1)}_B{a.get('budget_bits', 0)}"
-        f"_s{cfg['seed']}{_variant_suffix(cfg)}"
-    )
 
 
 def _fmt(value) -> str:
