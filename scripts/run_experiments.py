@@ -33,6 +33,7 @@ if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
 from bacmarl.utils.config import load_config  # noqa: E402
+from bacmarl.utils.naming import run_name  # noqa: E402  唯一实现，禁止在脚本里镜像
 
 PLAN_COLUMNS = (
     "group",
@@ -53,51 +54,9 @@ _LEGACY_OVERRIDES = {
 }
 
 
-def _channel_off(value) -> bool:
-    """标量 0 视为关闭信道；训练区间 [a, b] 不算（与 train._channel_off 同口径）。"""
-    try:
-        return float(value) == 0.0
-    except (TypeError, ValueError):
-        return False
-
-
-def _variant_suffix(cfg: dict) -> str:
-    """消融变体短后缀，与 `train._variant_suffix` 同口径（contracts 第 6 节）。
-
-    默认配置返回空串，既有目录名不受影响；消融只改 aggregate / use_gate / 信道，
-    运行名主体字段全同，不加后缀就会写进同一个目录。
-    """
-    a, e = cfg.get("algo") or {}, cfg.get("env") or {}
-    parts = []
-    aggregate = str(a.get("aggregate", "softmax"))
-    if aggregate != "softmax":
-        parts.append(f"agg{aggregate}")
-    if a.get("use_gate", True) is not True:
-        parts.append("nogate")
-    channel = e.get("channel") or {}
-    drop_off = _channel_off(channel.get("drop_p", 0.0))
-    flip_off = _channel_off(channel.get("flip_p", 0.0))
-    if drop_off and flip_off:
-        parts.append("nonoise")
-    elif drop_off:
-        parts.append("drop0")
-    elif flip_off:
-        parts.append("flip0")
-    return ("_" + "-".join(parts)) if parts else ""
-
-
-def run_name(cfg: dict) -> str:
-    """与 `bacmarl.runners.train.run_name` 同一口径（契约第 6 节）。
-
-    这里不 import train：它会把 torch 拉进来，排班不该依赖训练依赖。
-    两者一致性由 `tests/test_experiments_plan.py` 在有 torch 的环境下对照（CI 会跑）。
-    """
-    e, a = cfg["env"], cfg["algo"]
-    return (
-        f"{e.get('scene', 'formation')}_{e['n_agents']}n_{a.get('name', a['comm'])}"
-        f"_L{a.get('msg_bits', 0)}_K{e.get('recv_k', 1)}_B{a.get('budget_bits', 0)}"
-        f"_s{cfg['seed']}{_variant_suffix(cfg)}"
-    )
+# 运行名只有 `bacmarl.utils.naming` 一份实现（contracts 第 6 节）。这里曾经镜像过一份，
+# 结果 #11 修好连续消息的 L/B 之后，脚本还在算 `L0_B1e9`，排班会跟训练写出两个目录。
+# naming 不带 torch，import 进来不会把训练依赖拖进排班。
 
 
 def _fmt(value) -> str:

@@ -104,19 +104,25 @@ def test_collision_guard_flags_same_experiment_and_run_name():
 
 
 @pytest.mark.parametrize(
-    "overrides",
+    "algo,overrides",
     [
-        [],
-        ["algo.aggregate=mean"],
-        ["algo.use_gate=false"],
-        ["env.channel.drop_p=0.0", "env.channel.flip_p=0.0"],
+        ("bac", []),
+        ("bac", ["algo.aggregate=mean"]),
+        ("bac", ["algo.use_gate=false"]),
+        ("bac", ["env.channel.drop_p=0.0", "env.channel.flip_p=0.0"]),
+        # 连续消息基线的 L/B 段（Issue #11）：驱动必须与训练算出同一个名字，
+        # 否则排班写 `L0_B1e9`、训练写 `L1024_Binf`，同名判断和撞名检查全失效。
+        ("ic3net", []),
+        ("tarmac", []),
+        # 值分解基线（L0/B0.0）。
+        ("qmix", []),
     ],
 )
-def test_run_name_matches_train_module(overrides):
+def test_run_name_matches_train_module(algo, overrides):
     """口径必须与 train.run_name 完全一致，含 contracts 第 6 节的变体后缀。"""
     tr = pytest.importorskip("bacmarl.runners.train")
     from bacmarl.utils.config import load_config
 
-    tokens = ["env=formation", "algo=bac", "seed=7", *overrides]
+    tokens = ["env=formation", f"algo={algo}", "seed=7", *overrides]
     cfg = load_config(tokens)
     assert rx.run_name(cfg) == tr.run_name(cfg)
