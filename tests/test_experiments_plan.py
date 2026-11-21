@@ -152,3 +152,44 @@ def test_plan_directories_match_training_run_name_for_continuous_baselines():
         assert rx.run_name(cfg).endswith("_L1024_K3_Binf_s0")
         assert "B1000000000" not in rx.run_name(cfg)
 
+
+def test_algos_axis_expands_main_and_routes_qmix():
+    """主实验的算法轴：算法 × seed，QMIX 必须派发到独立入口。"""
+    jobs = rx.plan(["main"], seeds=[0], total_env_steps=1000, algos=["bac", "ic3net", "qmix"])
+    names = {j["algo"]: j["run_name"] for j in jobs}
+    assert set(names) == {"bac", "ic3net", "qmix"}
+    assert names["bac"].endswith("L4_K3_B2.0_s0")
+    assert names["ic3net"].endswith("L1024_K3_Binf_s0")
+    assert names["qmix"].endswith("L0_K3_B0.0_s0")
+
+    runners = {j["algo"]: j["runner"] for j in jobs}
+    assert runners["qmix"] == "bacmarl.runners.qmix"
+    assert runners["bac"] == "bacmarl.runners.train"
+    assert "bacmarl.runners.qmix" in next(j["command"] for j in jobs if j["algo"] == "qmix")
+    assert not rx.find_collisions(jobs)
+
+
+def test_algos_axis_multiplies_seeds():
+    jobs = rx.plan(["main"], seeds=[0, 1], total_env_steps=1000, algos=["bac", "qmix"])
+    assert len(jobs) == 4
+    assert {(j["algo"], j["seed"]) for j in jobs} == {
+        ("bac", 0),
+        ("bac", 1),
+        ("qmix", 0),
+        ("qmix", 1),
+    }
+
+
+def test_algos_only_affects_main_group(capsys):
+    """消融/扫描是 BAC 自己的轴，--algos 不该把它们展开成别的算法。"""
+    jobs = rx.plan(["ablation"], seeds=[0], total_env_steps=1000, algos=["ippo"])
+    assert {j["algo"] for j in jobs} == {"bac"}
+    assert "只作用于 main 组" in capsys.readouterr().out
+
+
+def test_main_group_without_algos_still_plans_bac():
+    """不传 --algos 时保持旧行为，避免已有脚本的命令行语义变化。"""
+    jobs = rx.plan(["main"], seeds=[0], total_env_steps=1000)
+    assert [j["variant"] for j in jobs] == ["main"]
+    assert [j["algo"] for j in jobs] == ["bac"]
+

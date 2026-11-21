@@ -250,13 +250,29 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--out", default=None, help="输出 csv 路径（仅单 run 时有效）")
     ap.add_argument("--list-grid", action="store_true", help="只打印网格并退出")
+    ap.add_argument(
+        "--allow-random",
+        action="store_true",
+        help="显式允许缺 checkpoint 时用随机策略出对照行（默认缺 ckpt 直接失败）",
+    )
     args = ap.parse_args(argv if argv is not None else sys.argv[1:])
 
     cli_grid = parse_grid(args.drop_p)
     cols = columns(args.with_extra)
 
-    for run_arg in args.run:
-        run_dir = _resolve_run(run_arg)
+    # 路径打错时绝不能"成功"：mkdir 会把目录建出来、缺 ckpt 会静默退化成随机策略，
+    # 最后在正式结果的目录里留一份随机策略的 robust.csv，事后很难辨认。
+    runs = [_resolve_run(p) for p in args.run]
+    missing = [p for p in runs if not p.is_dir()]
+    if missing:
+        for p in missing:
+            print(f"[FAIL] run 目录不存在：{p}")
+        return 2
+    if args.out and len(runs) > 1:
+        print("[FAIL] --out 只能配单个 --run；多 run 时请让每个 run 写自己的 robust.csv")
+        return 2
+
+    for run_dir in runs:
         cfg = _read_cfg(run_dir)
         grid, source = resolve_grid(
             cfg, cli_grid=cli_grid, config_path=args.config
@@ -264,6 +280,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[INFO] {run_dir.name or run_dir} 丢包网格 {grid}（来源：{source}）")
         if args.list_grid:
             continue
+
+        ckpt_path = run_dir / args.ckpt
+        if not ckpt_path.exists() and not args.allow_random:
+            print(
+                f"[FAIL] 缺少 {ckpt_path}：正式评测不能拿随机策略冒充策略结果；"
+                "确实要做随机对照请显式加 --allow-random"
+            )
+            return 3
 
         actor = _load_actor(run_dir, cfg, args.ckpt)
         rows = []
