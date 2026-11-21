@@ -23,6 +23,14 @@ python -m bacmarl.runners.qmix env=formation algo=qmix seed=0   # QMIX 基线（
 
 Windows 没有 make，直接敲上面的命令即可；macOS/Linux 可用 `make smoke` 等目标。
 
+正式实验与出图（一次排 6 个方法 × N 个 seed，QMIX 自动派发到 `runners/qmix.py`）：
+
+```bash
+python scripts/run_experiments.py --groups main --algos bac ippo mappo ic3net tarmac qmix --seeds 0 1 2 --dry-run   # 只排班，先核对名字
+python scripts/run_experiments.py --groups main --algos bac ippo mappo ic3net tarmac qmix --seeds 0 1 2 --execute
+python scripts/make_figures.py           # 读 results/ 出 4 张图
+```
+
 ## 目录（与开题报告 A.1 一致）
 
 ```
@@ -57,14 +65,14 @@ results/            实验输出（不入库）
 
 W1 环境+框架+接口冻结 → W2–3 方法跑通 → W4–5 正式实验 → W6 结题。
 
-## 修复与验证状态（2026-11-14）
+## 修复与验证状态（2026-11-21）
 
 | 检查 | 结果 |
 |---|---|
-| 环境、通信信息流、缓存与 GAE 测试 | 124 项测试；含旋转编队、局部脚本多种子完成、有向边、静默/丢包、STE、发送预算及跨回合边界 |
+| 环境、通信信息流、缓存与 GAE 测试 | **257 项测试**：原 124 项覆盖旋转编队、局部脚本多种子完成、有向边、静默/丢包、STE、发送预算及跨回合边界；后续补入 6 算法命名口径、QMIX 学习、评测失败路径与出图 label 分组 |
 | `python scripts/verify_transitions.py` | 首步与末步缓存奖励均与实际 step 返回值一致 |
 | rollout 分段 | 环境与隐状态跨段延续；仅 done 环境重置 |
-| CI | Python 3.11，验证可编辑安装、完整测试与真实 MPE2 的标准模块训练入口 |
+| CI | Python 3.11，验证可编辑安装、完整测试与真实 MPE2 的标准模块训练入口（QMIX 冒烟与 ic3net 命名检查也已纳入） |
 | 正式参数 | `env=formation`：真实 MPE2，R_obs=R_comm=0.8；旧半径移至 `formation_legacy` |
 
 旧版“训练跑通 / bits 接近预算”的结果受通信方向和奖励错位影响，不能证明通信有效或作为正式实验数据。修复依据、逐项核查和可复现命令见 [问题核查与修复](docs/issue-fixes.md)。短训练仅验证代码运行，不代表策略收敛。
@@ -83,6 +91,12 @@ W1 环境+框架+接口冻结 → W2–3 方法跑通 → W4–5 正式实验 �
 
 - **C**：PPO 目前按单步分段更新（缓存的 `h_prev` 逐帧传入，不做全轨迹 BPTT）；需要真实梯度截断时才扩展为分段 BPTT。
 - **D**：QMIX 已落地并能在玩具任务上收敛（`tests/test_qmix_learning.py`），但在本奖励、本预算下贪心策略会滑向「散开避碰」：编队误差涨到 ~8、`eval/return` −425，而随机策略是 −115。原因是碰撞项按机对计价、且单调分解表达不了碰撞的联合作用（QTRAN/QPLEX 就是在松绑这条约束）。取舍与三条可选路线见 [对比基线交付说明](docs/baselines.md) §5.2/§8，需要 A 拍板。
-- **E**：`scripts/make_figures.py` 读的是 `results/*/metrics.csv`，正式实验要在 `configs/experiment/main.yaml` 里补齐多 seed 矩阵后才能出统计图；批量驱动还需加算法轴（QMIX 派发到 `runners/qmix.py`，见 `docs/baselines.md` §7）。
+- **E**：正式实验的排班、评测与出图链路已打通（`--algos` 算法轴 + QMIX 派发、评测目录/ckpt 校验、`--drop-p`/`--flip-p` 口径、出图 label 带实验组），当前缺的是**跑数**：`results/` 里只有 ≤2000 步的验证跑，需按
+
+  ```bash
+  python scripts/run_experiments.py --groups main --algos bac ippo mappo ic3net tarmac qmix --seeds 0 1 2 --execute
+  ```
+
+  跑完再 `python scripts/make_figures.py` 出 4 张图。seed 数与算力预算待定（单机 CPU 实测 200k 步约 25 min/run，18 run 约 7–8 h）。
 
 
