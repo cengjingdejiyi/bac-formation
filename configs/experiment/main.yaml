@@ -9,6 +9,7 @@ train:
   clip_eps: 0.2
   norm_adv: true           # 优势在整轮更新上归一化（不是逐小批量）
   reward_norm: true        # shaped reward 按滑动标准差缩放；最优策略不变，价值目标降到 O(1)
+  value_norm: false        # 价值回归目标按回合回报 std 缩放（O(1) 量级）；与 reward_norm 互斥
   value_clip_eps: null     # 可选：价值目标相对 v_old 的裁断；配 reward_norm 才合适，留空即关闭
   entropy_coef: 0.01
   ppo_epochs: 4
