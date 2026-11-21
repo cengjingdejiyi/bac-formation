@@ -126,7 +126,11 @@ def parse_grid(text: str | None) -> list[float] | None:
         val = [val]
     if not isinstance(val, list):
         return None
-    return [float(v) for v in val]
+    try:
+        return [float(v) for v in val]
+    except (TypeError, ValueError):
+        # 混进 `abc` 这类脏值时整条网格视为非法，由调用方报错，不静默丢掉那一项
+        return None
 
 
 def evaluate_policy(
@@ -258,6 +262,13 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv if argv is not None else sys.argv[1:])
 
     cli_grid = parse_grid(args.drop_p)
+    if args.drop_p is not None and cli_grid is None:
+        # 静默回退到仓库默认会让"我指定了网格"这件事变成假话，网格来源在日志里也不对。
+        print(
+            f'[FAIL] --drop-p 取值非法：{args.drop_p!r}'
+            '（示例："0.0,0.15,0.3" 或 "[0.0,0.3]"）'
+        )
+        return 2
     cols = columns(args.with_extra)
 
     # 路径打错时绝不能"成功"：mkdir 会把目录建出来、缺 ckpt 会静默退化成随机策略，

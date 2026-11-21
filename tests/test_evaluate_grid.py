@@ -157,6 +157,18 @@ def test_missing_run_dir_is_an_error_and_writes_nothing(tmp_path, capsys):
     assert not ghost.exists()
 
 
+def test_invalid_drop_p_is_an_error_not_a_fallback(tmp_path, capsys):
+    """显式给了 --drop-p 却解析不出来，不能悄悄退回仓库默认网格。"""
+    run = tmp_path / "formation_6n_bac_L4_K3_B2.0_s0"
+    run.mkdir()
+    _write_yaml(run / "config.yaml", [0.0, 0.3])
+    assert evaluate.main(
+        ["--run", str(run), "--drop-p", "0.0,abc", "--episodes", "1", "--allow-random"]
+    ) == 2
+    assert "非法" in capsys.readouterr().out
+    assert not (run / "robust.csv").exists()
+
+
 def test_out_with_multiple_runs_is_an_error(tmp_path, capsys):
     runs = []
     for seed in (0, 1):
