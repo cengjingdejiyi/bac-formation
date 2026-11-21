@@ -8,15 +8,28 @@
 
 ## 快速开始
 
+装环境有两条路：**一键脚本**（推荐给要跑多 seed 的人）或手动 `pip`。
+
+```powershell
+pwsh -File scripts/setup_env.ps1        # Windows；-Lock 走冻结版本复现
+```
+```bash
+bash scripts/setup_env.sh               # macOS/Linux；--lock 走冻结版本复现
+```
+
+手动安装等价于：
+
 ```bash
 pip install -r requirements.txt      # 或 pip install -e ".[dev,env]"
 pip install -e . --no-deps           # 使用 requirements.txt 安装后注册 src 包
 python scripts/smoke.py              # 契约冒烟：不装 torch 也能过
-python -m pytest -q tests            # 形状与缓冲测试
+python -m pytest -q tests            # 形状与缓冲测试（当前 265 项）
 python scripts/verify_transitions.py # 实测当前训练采样器的奖励/终止对齐
 python -m bacmarl.runners.train env=formation algo=bac env.n_agents=6 algo.msg_bits=4 seed=0
 python -m bacmarl.runners.qmix env=formation algo=qmix seed=0   # QMIX 基线（值分解）
 ```
+
+**多 seed 正式实验的完整操作（装环境 → 排班 → 分工 → 结果验收）见 [运行手册](docs/RUNBOOK.md)。**
 
 基线（IC3Net 式 / TarMAC 式 / QMIX）的摆位、调参记录与复现命令见 [对比基线交付说明](docs/baselines.md)。
 运行名与通信量口径（Issue #11）由 `src/bacmarl/utils/naming.py` 统一实现，别再各写一份。
@@ -69,11 +82,24 @@ W1 环境+框架+接口冻结 → W2–3 方法跑通 → W4–5 正式实验 �
 
 | 检查 | 结果 |
 |---|---|
-| 环境、通信信息流、缓存与 GAE 测试 | **257 项测试**：原 124 项覆盖旋转编队、局部脚本多种子完成、有向边、静默/丢包、STE、发送预算及跨回合边界；后续补入 6 算法命名口径、QMIX 学习、评测失败路径与出图 label 分组 |
+| 环境、通信信息流、缓存与 GAE 测试 | **265 项测试**：原 124 项覆盖旋转编队、局部脚本多种子完成、有向边、静默/丢包、STE、发送预算及跨回合边界；后续补入 6 算法命名口径、QMIX 学习、评测失败路径、ckpt 加载失败（返回 4）、概率越界与 `value_norm` |
 | `python scripts/verify_transitions.py` | 首步与末步缓存奖励均与实际 step 返回值一致 |
 | rollout 分段 | 环境与隐状态跨段延续；仅 done 环境重置 |
+| 续训一致性 | β、优化器、奖励缩放、回合日志窗口（`recent`/`count`/`ret_sum`）随 ckpt 存取 |
 | CI | Python 3.11，验证可编辑安装、完整测试与真实 MPE2 的标准模块训练入口（QMIX 冒烟与 ic3net 命名检查也已纳入） |
 | 正式参数 | `env=formation`：真实 MPE2，R_obs=R_comm=0.8；旧半径移至 `formation_legacy` |
+
+### 2026-11-21 训练稳定性修复（#25 / 后续提交）
+
+- `train.value_norm: true`（`main.yaml` 默认）：价值回归目标按回合回报 std 缩放。起因是 `reward_norm`
+  的 `RunningStd.scale(min_std=1.0)` 只缩小不放大，本任务每步奖励 std≈0.5 → 缩放恒为 1.0，
+  价值目标仍是 O(100)，`loss/value` 均值 172、峰值 883。同配置 A/B（BAC 200k，seed 0）：
+  `loss/value` **172 → 1.5**、训练回报末窗 **−134.9 → −48.3**、eval ferr @194560 **3.85 → 0.56**。
+- `train.eval_gate_mode`（`threshold` | `sample`）：评测门控口径显式化；`sample` 与训练分布同口径，
+  预算合规比较用它（`evaluate.py --gate-mode sample`）。
+- 指标补齐：`train/return_all`（全程累计均值）、`train/formation_err_mean`（回合内每步均值），
+  与 `train/formation_err`（回合末值）分开，避免同一张表里两个口径混用。
+- 环境与复现：`requirements-lock.txt`、`scripts/setup_env.ps1` / `setup_env.sh`、`docs/RUNBOOK.md`。
 
 旧版“训练跑通 / bits 接近预算”的结果受通信方向和奖励错位影响，不能证明通信有效或作为正式实验数据。修复依据、逐项核查和可复现命令见 [问题核查与修复](docs/issue-fixes.md)。短训练仅验证代码运行，不代表策略收敛。
 
