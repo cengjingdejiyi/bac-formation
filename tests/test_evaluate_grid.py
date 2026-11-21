@@ -16,7 +16,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def _write_yaml(path: Path, grid) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    text = "experiment:\n  robustness:\n    drop_p: [" + ", ".join(str(g) for g in grid) + "]\n"
+    text = (
+        "experiment:\n  robustness:\n    drop_p: ["
+        + ", ".join(str(g) for g in grid)
+        + "]\n"
+    )
     path.write_text(text, encoding="utf-8")
     return path
 
@@ -38,7 +42,9 @@ def test_columns_with_extra_appends_tail():
 
 
 def test_grid_from_config_accepts_scalar_and_list():
-    assert evaluate.grid_from_config({"experiment": {"robustness": {"drop_p": 0.0}}}) == [0.0]
+    assert evaluate.grid_from_config(
+        {"experiment": {"robustness": {"drop_p": 0.0}}}
+    ) == [0.0]
     assert evaluate.grid_from_config(
         {"experiment": {"robustness": {"drop_p": [0.0, 0.1, 0.3]}}}
     ) == [0.0, 0.1, 0.3]
@@ -69,7 +75,9 @@ def test_resolve_grid_cli_wins(tmp_path):
 def test_resolve_grid_config_beats_run_config(tmp_path):
     run_cfg = {"experiment": {"robustness": {"drop_p": [0.0, 0.15]}}}
     ext = _write_yaml(tmp_path / "ext.yaml", [0.0, 0.1, 0.2, 0.3])
-    grid, src = evaluate.resolve_grid(run_cfg, config_path=ext, repo_grid=tmp_path / "none.yaml")
+    grid, src = evaluate.resolve_grid(
+        run_cfg, config_path=ext, repo_grid=tmp_path / "none.yaml"
+    )
     assert grid == [0.0, 0.1, 0.2, 0.3]
     assert "ext.yaml" in src
 
@@ -125,9 +133,12 @@ def test_robust_csv_extra_columns(tmp_path, monkeypatch):
     monkeypatch.setattr(evaluate, "evaluate_policy", lambda *a, **k: dict(metrics))
     monkeypatch.setattr(evaluate, "_load_actor", lambda *a, **k: None)
 
-    assert evaluate.main(
-        ["--run", str(run), "--episodes", "1", "--with-extra", "--allow-random"]
-    ) == 0
+    assert (
+        evaluate.main(
+            ["--run", str(run), "--episodes", "1", "--with-extra", "--allow-random"]
+        )
+        == 0
+    )
     with open(run / "robust.csv", encoding="utf-8") as f:
         header = next(csv.reader(f))
     assert header == evaluate.columns(with_extra=True)
@@ -152,7 +163,9 @@ def test_multiple_runs_write_own_csv(tmp_path, monkeypatch):
 def test_missing_run_dir_is_an_error_and_writes_nothing(tmp_path, capsys):
     """路径打错不能"成功"：以前会 mkdir 并写一份随机策略的 robust.csv。"""
     ghost = tmp_path / "typo_run"
-    assert evaluate.main(["--run", str(ghost), "--drop-p", "0.0", "--episodes", "1"]) == 2
+    assert (
+        evaluate.main(["--run", str(ghost), "--drop-p", "0.0", "--episodes", "1"]) == 2
+    )
     assert "不存在" in capsys.readouterr().out
     assert not ghost.exists()
 
@@ -160,7 +173,11 @@ def test_missing_run_dir_is_an_error_and_writes_nothing(tmp_path, capsys):
 def _write_run_cfg(path: Path, grid, flip=None) -> Path:
     """带 env.channel 的 run 配置，用来验证评测信道口径。"""
     path.parent.mkdir(parents=True, exist_ok=True)
-    lines = ["experiment:", "  robustness:", "    drop_p: [" + ", ".join(str(g) for g in grid) + "]"]
+    lines = [
+        "experiment:",
+        "  robustness:",
+        "    drop_p: [" + ", ".join(str(g) for g in grid) + "]",
+    ]
     if flip is not None:
         lines += ["env:", "  channel:", f"    flip_p: [{flip[0]}, {flip[1]}]"]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -197,9 +214,12 @@ def test_flip_p_cli_overrides_training_channel(tmp_path, monkeypatch):
 
     monkeypatch.setattr(evaluate, "evaluate_policy", fake_eval)
     monkeypatch.setattr(evaluate, "_load_actor", lambda *a, **k: None)
-    assert evaluate.main(
-        ["--run", str(run), "--episodes", "1", "--allow-random", "--flip-p", "0.2"]
-    ) == 0
+    assert (
+        evaluate.main(
+            ["--run", str(run), "--episodes", "1", "--allow-random", "--flip-p", "0.2"]
+        )
+        == 0
+    )
     assert seen["flip_p"] == 0.2
 
 
@@ -208,9 +228,20 @@ def test_invalid_drop_p_is_an_error_not_a_fallback(tmp_path, capsys):
     run = tmp_path / "formation_6n_bac_L4_K3_B2.0_s0"
     run.mkdir()
     _write_yaml(run / "config.yaml", [0.0, 0.3])
-    assert evaluate.main(
-        ["--run", str(run), "--drop-p", "0.0,abc", "--episodes", "1", "--allow-random"]
-    ) == 2
+    assert (
+        evaluate.main(
+            [
+                "--run",
+                str(run),
+                "--drop-p",
+                "0.0,abc",
+                "--episodes",
+                "1",
+                "--allow-random",
+            ]
+        )
+        == 2
+    )
     assert "非法" in capsys.readouterr().out
     assert not (run / "robust.csv").exists()
 
@@ -225,3 +256,82 @@ def test_out_with_multiple_runs_is_an_error(tmp_path, capsys):
     out = tmp_path / "one.csv"
     assert evaluate.main(["--run", *runs, "--out", str(out), "--episodes", "1"]) == 2
     assert "--out" in capsys.readouterr().out
+
+
+def test_ckpt_exists_but_load_fails_is_error(tmp_path, monkeypatch, capsys):
+    """ckpt 在、加载失败：不能静默出随机策略的 robust.csv（与缺文件同样致命）。"""
+    run = tmp_path / "formation_6n_bac_L4_K3_B2.0_s0"
+    run.mkdir()
+    _write_yaml(run / "config.yaml", [0.0])
+    ckpt = run / "ckpt" / "last.ckpt"
+    ckpt.parent.mkdir(parents=True)
+    ckpt.write_bytes(b"not a torch checkpoint")
+
+    def boom(*a, **k):
+        raise RuntimeError("size mismatch for encoder.fc.weight")
+
+    monkeypatch.setattr(evaluate, "_load_actor", boom)
+    monkeypatch.setattr(evaluate, "evaluate_policy", lambda *a, **k: {})
+    code = evaluate.main(["--run", str(run), "--episodes", "1"])
+    assert code == 4
+    out = capsys.readouterr().out
+    assert "加载失败" in out and "size mismatch" in out
+    assert not (run / "robust.csv").exists()
+
+
+def test_load_failure_with_allow_random_is_allowed(tmp_path, monkeypatch, capsys):
+    run = tmp_path / "formation_6n_bac_L4_K3_B2.0_s0"
+    run.mkdir()
+    _write_yaml(run / "config.yaml", [0.0])
+    ckpt = run / "ckpt" / "last.ckpt"
+    ckpt.parent.mkdir(parents=True)
+    ckpt.write_bytes(b"broken")
+
+    def boom(*a, **k):
+        raise RuntimeError("bad checkpoint")
+
+    monkeypatch.setattr(evaluate, "_load_actor", boom)
+    monkeypatch.setattr(
+        evaluate,
+        "evaluate_policy",
+        lambda *a, **k: {k2: 0.5 for k2 in evaluate._METRIC_KEYS},
+    )
+    assert evaluate.main(["--run", str(run), "--episodes", "1", "--allow-random"]) == 0
+    assert "加载失败" in capsys.readouterr().out
+    assert (run / "robust.csv").exists()
+
+
+def test_drop_p_out_of_range_is_an_error(tmp_path, capsys):
+    """概率越界不能当成合法网格跑出无意义的 robust.csv。"""
+    run = tmp_path / "formation_6n_bac_L4_K3_B2.0_s0"
+    run.mkdir()
+    _write_yaml(run / "config.yaml", [0.0])
+    assert (
+        evaluate.main(
+            [
+                "--run",
+                str(run),
+                "--drop-p",
+                "0.0,1.5",
+                "--episodes",
+                "1",
+                "--allow-random",
+            ]
+        )
+        == 2
+    )
+    assert "越界" in capsys.readouterr().out
+    assert not (run / "robust.csv").exists()
+
+
+def test_flip_p_out_of_range_is_an_error(tmp_path, capsys):
+    run = tmp_path / "formation_6n_bac_L4_K3_B2.0_s0"
+    run.mkdir()
+    _write_yaml(run / "config.yaml", [0.0])
+    assert (
+        evaluate.main(
+            ["--run", str(run), "--flip-p", "1.2", "--episodes", "1", "--allow-random"]
+        )
+        == 2
+    )
+    assert "越界" in capsys.readouterr().out

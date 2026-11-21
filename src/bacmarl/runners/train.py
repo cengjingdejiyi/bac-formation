@@ -26,13 +26,39 @@ from bacmarl.runners.rollout import collect_rollout  # noqa: E402
 from bacmarl.utils.checkpoint import load_checkpoint, save_checkpoint  # noqa: E402
 from bacmarl.utils.config import load_config  # noqa: E402
 from bacmarl.utils.logger import RunLogger  # noqa: E402
-from bacmarl.utils.naming import run_name, variant_suffix as _variant_suffix  # noqa: E402
+from bacmarl.utils.naming import (
+    run_name,
+    variant_suffix as _variant_suffix,
+)  # noqa: E402
 from bacmarl.utils.normalizer import RunningStd  # noqa: E402
 from bacmarl.utils.runtime import dump_yaml as _dump_yaml  # noqa: E402
 from bacmarl.utils.runtime import eval_channel as _eval_channel  # noqa: E402
 from bacmarl.utils.seeding import set_seed  # noqa: E402
 
 _EVAL_KEYS = _METRIC_KEYS
+
+
+def value_target_scale(recent_episodes) -> float:
+    """价值目标缩放系数：回合回报标准差的倒数，把 O(100) 的回报压到 O(1)。
+
+    只用于价值回归目标，策略梯度不受影响（优势在 ppo_update 内逐轮归一化）。
+    不放大：std < 1 时返回 1.0；还没有回合数据时也返回 1.0。
+    """
+    if not recent_episodes:
+        return 1.0
+    rets = np.asarray([ep["ret"] for ep in recent_episodes], dtype=np.float64)
+    std = float(rets.std())
+    if not np.isfinite(std) or std < 1.0:
+        return 1.0
+    return 1.0 / std
+
+
+def validate_norm_cfg(tr: dict) -> None:
+    """reward_norm 与 value_norm 互斥：两者都在缩放价值目标尺度，同时开会缩两次。"""
+    if tr.get("value_norm", False) and tr.get("reward_norm", True):
+        raise ValueError(
+            "train.value_norm 与 train.reward_norm 互斥：请显式设 train.reward_norm=false"
+        )
 
 
 def _restore_run(tr: dict, actor, critic, opt, dual, scaler) -> int:
@@ -74,6 +100,7 @@ def main(argv: list[str] | None = None) -> int:
 
     set_seed(int(cfg["seed"]))
     tr = cfg["train"]
+    validate_norm_cfg(tr)
     env_cfg = EnvConfig.from_dict(cfg["env"])
     with VecFormationEnv(int(tr["n_envs"]), env_cfg, seed=int(cfg["seed"])) as vec:
         return _train(cfg, vec, torch)
@@ -173,6 +200,17 @@ def _train(cfg: dict, vec: VecFormationEnv, torch) -> int:
                 float(tr["gamma"]),
                 float(tr["gae_lambda"]),
             )
+            # value_norm：只缩放价值回归目标（ret / v_old），策略梯度不受影响
+            # （优势在 ppo_update 里逐轮归一化）。目的是把 O(100) 的回合回报压到 O(1)，
+            # 否则 value loss 随量级平方放大（实测 76~400），后段一次尖峰就把策略带崩。
+            value_scale = (
+                value_target_scale(recent_episodes)
+                if tr.get("value_norm", False)
+                else 1.0
+            )
+            if value_scale != 1.0:
+                buf.ret[: buf.ptr] *= value_scale
+                buf.value[: buf.ptr] *= value_scale
             tb = {
                 k: torch.as_tensor(v)
                 for k, v in buf.batched(buf.flat_indices()).items()
@@ -221,6 +259,7 @@ def _train(cfg: dict, vec: VecFormationEnv, torch) -> int:
                     "train/episodes": episode_count,
                     "train/step_reward": float(buf.reward_team.mean()),
                     "train/reward_scale": float(scaler.scale()) if scaler else 1.0,
+                    "train/value_scale": value_scale,
                     "comm/bits": float(buf.bits.mean()),
                     "comm/speak_rate": float(buf.gate.mean()),
                     "comm/beta": beta,

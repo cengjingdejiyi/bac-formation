@@ -165,13 +165,16 @@ class Critic(nn.Module):
 | comm/bits | 每机每步平均发送比特数 |
 | comm/speak_rate | 门控发言率 |
 | comm/beta | 当前 β |
+| train/reward_scale | `reward_norm` 的缩放系数；`RunningStd.scale(min_std=1.0)` 只缩小不放大，本任务的每步奖励 std < 1 → 实测恒为 1.0（即该归一化对负奖励无效） |
+| train/value_scale | `value_norm` 的价值目标缩放系数（回合回报 std 的倒数，O(1) 量级） |
 | loss/policy, loss/value, loss/entropy | 各项损失 |
 
 - 评估：每隔固定步数用确定性策略跑固定数量回合；鲁棒性由 `evaluate.py` 读 checkpoint，按丢包率网格复测，输出 `robust.csv`（列：drop_p, success_rate, formation_err, speak_rate, bits；`--with-extra` 才追加 return/collisions/length）。网格来源优先级：`--drop-p` > `--config <实验配置>` > run 的 `config.yaml` > 仓库默认 `configs/experiment/robust.yaml`，实际来源必须打进日志（不许悄悄退化成 `[0.0]`）。
   - `--drop-p` 一旦显式给出就必须解析成功，解析失败直接 `[FAIL]` 返回 2；不许回退到仓库默认网格。
   - `--flip-p` 省略时取训练内评测口径（`train.eval_flip_p`，否则 `env.channel.flip_p` 训练区间中点），与 `train.py`/`qmix.py` 的 `eval/*` 保持同一信道；只有显式给值才覆盖。
   - `--ckpt` 是**相对 run 目录**的路径，默认 `ckpt/last.ckpt`；只看该 run 自己的目录，不跨 run 查找。
-  - `--run` 目录不存在直接返回 2（不 `mkdir`）；缺 ckpt 返回 3；确实要做随机策略对照必须显式 `--allow-random`（日志会打 `[WARN] 退化为随机策略`，这种 `robust.csv` 不得进正式汇总）。
+  - `--run` 目录不存在直接返回 2（不 `mkdir`）；缺 ckpt 返回 3；**ckpt 存在但加载失败返回 4**（维度/hidden/通信模块不符或文件损坏都不许静默退化成随机策略）；确实要做随机策略对照必须显式 `--allow-random`（日志会打 `[WARN] 退化为随机策略`，这种 `robust.csv` 不得进正式汇总）。
+  - `--drop-p` / `--flip-p` 的概率必须落在 `[0,1]`，越界直接 `[FAIL]` 返回 2（以前 `1.5` 也能跑出一份看似正常的对照表）。
   - `--out` 只能配单个 `--run`；多 run 时各自写自己的 `robust.csv`。
 - 作图：只读 `metrics.csv` 与 `robust.csv`，曲线为多种子均值 ± 标准差；`scripts/make_figures.py` 默认输出到 `results/figures/`（`train_eval_metrics.png`、`comm_metrics.png`、`robust_drop.png`、`curves_return.png`）。图例 label 取「相对 `--results` 的目录链 + run 名」（如 `main/formation_6n_bac_L4_K3_B2.0`），不同实验组里同名的 run 不得合并成多 seed。
 
