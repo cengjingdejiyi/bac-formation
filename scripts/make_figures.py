@@ -5,6 +5,8 @@
 - `robust.csv`：`evaluate.py` 按丢包率网格复测产物（列见 contracts 第 6 节）。
 - 同一配置（去掉 `_s{seed}` 后缀）的多个 seed 按步数 / 丢包率求均值 ± 标准差，
   单 seed 时标准差记为 0（用 `ddof=0`），多 seed 用样本标准差（`ddof=1`）。
+- label 带实验组前缀：`results/main/xxx_s0` 的 label 是 `main/xxx`，避免 `main` 与
+  `ablation` 里同名的 run 被当成同一次跑的多 seed 合并。
 - 缺 matplotlib 时只打印汇总并返回 0，CI 不装绘图库也能跑。
 
 用法：
@@ -43,6 +45,23 @@ def parse_run_name(name: str) -> dict:
     return {"label": m.group("stem") + m.group("variant"), "seed": int(m.group("seed"))}
 
 
+def parse_run_path(path: Path, root: Path) -> dict:
+    """run 目录 + 相对 `--results` 的位置 → label/seed。
+
+    label 必须带实验组（`main` / `ablation` / …）：`main` 与 `ablation` 里同名的 run
+    （如 `formation_6n_bac_L4_K3_B2.0_nogate`）只差变体后缀时，光看目录名会被当成
+    同一次跑的多 seed 合并进同一条曲线。
+    """
+    info = parse_run_name(Path(path).name)
+    try:
+        parts = Path(path).relative_to(root).parts
+    except ValueError:
+        parts = ()
+    if len(parts) > 1:
+        return {"label": "/".join((*parts[:-1], info["label"])), "seed": info["seed"]}
+    return info
+
+
 def _num(text) -> float | None:
     """空串 / nan / 非数字统一当作缺失。"""
     if text is None:
@@ -66,7 +85,7 @@ def load_metrics(root: Path) -> dict:
     series: dict = {}
     seeds: dict = {}
     for path in sorted(Path(root).rglob("metrics.csv")):
-        info = parse_run_name(path.parent.name)
+        info = parse_run_path(path.parent, Path(root))
         label = info["label"]
         if info["seed"] is not None:
             seeds.setdefault(label, set()).add(info["seed"])
@@ -90,7 +109,7 @@ def load_robust(root: Path) -> dict:
     series: dict = {}
     seeds: dict = {}
     for path in sorted(Path(root).rglob("robust.csv")):
-        info = parse_run_name(path.parent.name)
+        info = parse_run_path(path.parent, Path(root))
         label = info["label"]
         if info["seed"] is not None:
             seeds.setdefault(label, set()).add(info["seed"])

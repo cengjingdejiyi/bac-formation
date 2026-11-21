@@ -75,18 +75,41 @@ def test_parse_run_name_without_seed():
 def test_load_metrics_groups_seeds_by_config(tmp_path):
     _build_tree(tmp_path)
     data = mf.load_metrics(tmp_path)
-    label = "formation_6n_bac_L4_K3_B2.0"
+    label = "main/formation_6n_bac_L4_K3_B2.0"
     assert label in data["series"]
     assert data["seeds"][label] == {0, 1}
     pts = data["series"][label]["train/return"][1000.0]
     assert sorted(pts) == [1.0, 2.0]
-    assert "formation_6n_bac_L4_K3_B2.0_nogate" in data["series"]
+    assert "ablation/formation_6n_bac_L4_K3_B2.0_nogate" in data["series"]
+
+
+def test_labels_carry_the_experiment_group(tmp_path):
+    """同一 run 名出现在不同实验组时必须分开，否则会被当成多 seed 合并。"""
+    _build_tree(tmp_path)
+    # 与 main 里同名、同 seed、且没有变体后缀的消融跑
+    run = tmp_path / "ablation" / "formation_6n_bac_L4_K3_B2.0_s0"
+    _write_csv(run / "metrics.csv", METRIC_HEADER, _metrics_rows(9.0, 9.0))
+    data = mf.load_metrics(tmp_path)
+    main_lb = "main/formation_6n_bac_L4_K3_B2.0"
+    abl_lb = "ablation/formation_6n_bac_L4_K3_B2.0"
+    assert data["seeds"][main_lb] == {0, 1}
+    assert data["seeds"][abl_lb] == {0}
+    assert max(data["series"][abl_lb]["train/return"][1000.0]) == 9.0
+    assert 9.0 not in data["series"][main_lb]["train/return"][1000.0]
+
+
+def test_run_outside_group_dirs_keeps_plain_label(tmp_path):
+    """`--results` 下一层直接放 run（没有实验组目录）时不加前缀。"""
+    run = tmp_path / "formation_6n_bac_L4_K3_B2.0_s0"
+    _write_csv(run / "metrics.csv", METRIC_HEADER, _metrics_rows(1.0, 2.0))
+    data = mf.load_metrics(tmp_path)
+    assert list(data["series"]) == ["formation_6n_bac_L4_K3_B2.0"]
 
 
 def test_load_metrics_skips_nan_and_empty(tmp_path):
     _build_tree(tmp_path)
     data = mf.load_metrics(tmp_path)
-    col = data["series"]["formation_6n_bac_L4_K3_B2.0"]["eval/return"]
+    col = data["series"]["main/formation_6n_bac_L4_K3_B2.0"]["eval/return"]
     assert sorted(col) == [2000.0]  # 1000 步那行是 nan / 空
     assert col[2000.0] == [2.0, 3.0]
 
@@ -103,7 +126,7 @@ def test_aggregate_mean_and_std():
 def test_load_robust_groups_seeds(tmp_path):
     _build_tree(tmp_path)
     data = mf.load_robust(tmp_path)
-    label = "formation_6n_bac_L4_K3_B2.0"
+    label = "main/formation_6n_bac_L4_K3_B2.0"
     pts = data["series"][label]["success_rate"][0.3]
     assert sorted(pts) == [0.6, 0.7]
 
@@ -116,7 +139,7 @@ def test_main_list_only_does_not_write(tmp_path, capsys):
     _build_tree(tmp_path)
     out = tmp_path / "figs"
     assert mf.main(["--results", str(tmp_path), "--out", str(out), "--list"]) == 0
-    assert "formation_6n_bac_L4_K3_B2.0" in capsys.readouterr().out
+    assert "main/formation_6n_bac_L4_K3_B2.0" in capsys.readouterr().out
     assert not out.exists()
 
 
