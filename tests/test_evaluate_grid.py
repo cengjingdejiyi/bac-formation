@@ -110,7 +110,7 @@ def test_robust_csv_columns_follow_contract(tmp_path, monkeypatch):
     monkeypatch.setattr(evaluate, "evaluate_policy", lambda *a, **k: dict(metrics))
     monkeypatch.setattr(evaluate, "_load_actor", lambda *a, **k: None)
 
-    assert evaluate.main(["--run", str(run), "--episodes", "1"]) == 0
+    assert evaluate.main(["--run", str(run), "--episodes", "1", "--allow-random"]) == 0
     with open(run / "robust.csv", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
     assert list(rows[0].keys()) == evaluate.columns()
@@ -125,7 +125,9 @@ def test_robust_csv_extra_columns(tmp_path, monkeypatch):
     monkeypatch.setattr(evaluate, "evaluate_policy", lambda *a, **k: dict(metrics))
     monkeypatch.setattr(evaluate, "_load_actor", lambda *a, **k: None)
 
-    assert evaluate.main(["--run", str(run), "--episodes", "1", "--with-extra"]) == 0
+    assert evaluate.main(
+        ["--run", str(run), "--episodes", "1", "--with-extra", "--allow-random"]
+    ) == 0
     with open(run / "robust.csv", encoding="utf-8") as f:
         header = next(csv.reader(f))
     assert header == evaluate.columns(with_extra=True)
@@ -142,6 +144,26 @@ def test_multiple_runs_write_own_csv(tmp_path, monkeypatch):
     monkeypatch.setattr(evaluate, "evaluate_policy", lambda *a, **k: dict(metrics))
     monkeypatch.setattr(evaluate, "_load_actor", lambda *a, **k: None)
 
-    assert evaluate.main(["--run", *runs, "--episodes", "1"]) == 0
+    assert evaluate.main(["--run", *runs, "--episodes", "1", "--allow-random"]) == 0
     for run in runs:
         assert (Path(run) / "robust.csv").exists()
+
+
+def test_missing_run_dir_is_an_error_and_writes_nothing(tmp_path, capsys):
+    """路径打错不能"成功"：以前会 mkdir 并写一份随机策略的 robust.csv。"""
+    ghost = tmp_path / "typo_run"
+    assert evaluate.main(["--run", str(ghost), "--drop-p", "0.0", "--episodes", "1"]) == 2
+    assert "不存在" in capsys.readouterr().out
+    assert not ghost.exists()
+
+
+def test_out_with_multiple_runs_is_an_error(tmp_path, capsys):
+    runs = []
+    for seed in (0, 1):
+        run = tmp_path / f"formation_6n_bac_L4_K3_B2.0_s{seed}"
+        run.mkdir()
+        _write_yaml(run / "config.yaml", [0.0])
+        runs.append(str(run))
+    out = tmp_path / "one.csv"
+    assert evaluate.main(["--run", *runs, "--out", str(out), "--episodes", "1"]) == 2
+    assert "--out" in capsys.readouterr().out

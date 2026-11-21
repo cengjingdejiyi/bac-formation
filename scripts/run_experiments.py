@@ -17,7 +17,11 @@
 用法：
     python scripts/run_experiments.py --list
     python scripts/run_experiments.py --groups main ablation --seeds 0 1 2 --dry-run
+    python scripts/run_experiments.py --groups main --algos bac ippo ic3net tarmac qmix --seeds 0 --dry-run
     python scripts/run_experiments.py --groups main --seeds 0 --total-env-steps 2000 --execute
+
+`--algos` 只作用于 `main` 组：主实验是「六种方法 × 多 seed」，算法名进 `run_name`，
+QMIX 走独立入口 `bacmarl.runners.qmix`，其余走 `bacmarl.runners.train`。
 """
 
 from __future__ import annotations
@@ -99,6 +103,16 @@ def _variant(entry) -> tuple[str, dict]:
     return name, dict(overrides)
 
 
+# QMIX 是 off-policy 值分解，有独立入口；其余都挂在统一 PPO 入口上。
+_QMIX_RUNNER = "bacmarl.runners.qmix"
+_TRAIN_RUNNER = "bacmarl.runners.train"
+
+
+def _runner_module(algo_name: str) -> str:
+    """按算法选入口：只有 qmix 走独立 runner，其余（含 BAC/IPPO/MAPPO/IC3Net/TarMAC）走 train。"""
+    return _QMIX_RUNNER if str(algo_name) == "qmix" else _TRAIN_RUNNER
+
+
 def _job(
     group: str,
     variant: str,
@@ -106,19 +120,23 @@ def _job(
     extra_tokens: list[str],
     total_env_steps: int | None,
     exp_name: str,
+    algo: str | None = None,
 ) -> dict:
     tokens = [
         f"experiment={group}",
         f"experiment.name={exp_name}",
         f"seed={int(seed)}",
+        *([f"algo={algo}"] if algo else []),
         *extra_tokens,
     ]
     if total_env_steps:
         tokens.append(f"train.total_env_steps={int(total_env_steps)}")
     cfg = load_config(tokens)
     name = run_name(cfg)
+    algo_name = str(cfg["algo"].get("name") or cfg["algo"].get("comm"))
+    module = _runner_module(algo_name)
     run_dir = ROOT / "results" / str(cfg["experiment"]["name"]) / name
-    cmd = [sys.executable, "-m", "bacmarl.runners.train", *tokens]
+    cmd = [sys.executable, "-m", module, *tokens]
     return {
         "group": group,
         "variant": variant,
@@ -128,6 +146,8 @@ def _job(
         "run_name": name,
         "run_dir": str(run_dir),
         "command": " ".join(cmd),
+        "runner": module,
+        "algo": algo_name,
         "cfg": cfg,
         "tokens": tokens,
     }
@@ -139,8 +159,13 @@ def plan(
     total_env_steps: int | None = None,
     only: list[str] | None = None,
     include_baseline: bool = False,
+    algos: list[str] | None = None,
 ) -> list[dict]:
-    """展开实验计划。groups 只接受会训练的分组；robust 是评测网格，不在此列。"""
+    """展开实验计划。groups 只接受会训练的分组；robust 是评测网格，不在此列。
+
+    `algos` 只展开 `main` 组（主实验 = 六种方法 × 多 seed）；消融与扫描本来就是
+    BAC 自己的轴，传进来会被忽略并提示。
+    """
     jobs: list[dict] = []
     for group in groups:
         if group == "robust":
@@ -149,10 +174,15 @@ def plan(
         base = load_config([f"experiment={group}"])
 
         if group == "main":
-            for seed in seeds:
-                jobs.append(_job(group, "main", seed, [], total_env_steps, "main"))
+            for algo in algos or [None]:
+                for seed in seeds:
+                    jobs.append(
+                        _job(group, algo or "main", seed, [], total_env_steps, "main", algo)
+                    )
 
         elif group == "ablation":
+            if algos:
+                print("[SKIP] --algos 只作用于 main 组；消融是 BAC 自己的变体轴")
             variants = (base.get("experiment") or {}).get("ablation") or []
             for entry in variants:
                 name, overrides = _variant(entry)
@@ -170,6 +200,8 @@ def plan(
                     )
 
         elif group == "sweep":
+            if algos:
+                print("[SKIP] --algos 只作用于 main 组；扫描是 BAC 自己的 L/K/B 轴")
             entries = (base.get("experiment") or {}).get("sweep") or []
             for entry in entries:
                 key, values = entry["key"], entry["values"]
@@ -277,6 +309,12 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="展开并执行批量实验（负责人 E）")
     ap.add_argument("--list", action="store_true", help="列出可用分组与消融变体后退出")
     ap.add_argument("--groups", nargs="*", default=["main"], help="main / ablation / sweep")
+    ap.add_argument(
+        "--algos",
+        nargs="*",
+        default=None,
+        help="main 组的算法轴（bac / ippo / mappo / ic3net / tarmac / qmix）；省略则用配置默认",
+    )
     ap.add_argument("--seeds", nargs="*", type=int, default=None, help="种子列表，默认取 config.yaml 的 seed")
     ap.add_argument("--only", nargs="*", default=None, help="只跑这些变体/扫描点")
     ap.add_argument("--total-env-steps", type=int, default=None, help="覆盖 train.total_env_steps")
@@ -306,10 +344,13 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"robust   : drop_p ∈ {grid}（评测网格，训练侧无任务）")
             else:
                 print(f"{group:<8} : train.total_env_steps={((cfg.get('train') or {}).get('total_env_steps'))}")
+        print("algos    : bac / ippo / mappo / ic3net / tarmac / qmix（--algos，仅 main 组）")
         return 0
 
     seeds = args.seeds if args.seeds else [int(load_config([])["seed"])]
-    jobs = plan(args.groups, seeds, args.total_env_steps, args.only, args.include_baseline)
+    jobs = plan(
+        args.groups, seeds, args.total_env_steps, args.only, args.include_baseline, args.algos
+    )
     if not jobs:
         print("[WARN] 计划为空，检查 --groups / --only")
         return 1
@@ -342,10 +383,10 @@ def main(argv: list[str] | None = None) -> int:
     env["PYTHONPATH"] = str(ROOT / "src") + os.pathsep + env.get("PYTHONPATH", "")
     failed = 0
     for index, job in enumerate(jobs, 1):
-        print(f"\n[RUN {index}/{len(jobs)}] {job['exp_name']}/{job['run_name']}")
+        print(f"\n[RUN {index}/{len(jobs)}] {job['exp_name']}/{job['run_name']} ({job['algo']})")
         print(job["command"])
         proc = subprocess.run(
-            [sys.executable, "-m", "bacmarl.runners.train", *job["tokens"]],
+            [sys.executable, "-m", job["runner"], *job["tokens"]],
             cwd=str(ROOT),
             env=env,
         )
