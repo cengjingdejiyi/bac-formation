@@ -29,6 +29,7 @@ if str(ROOT / "src") not in sys.path:
 import numpy as np  # noqa: E402
 
 from bacmarl.envs.formation_comm import EnvConfig, FormationCommEnv  # noqa: E402
+from bacmarl.utils.runtime import eval_channel  # noqa: E402
 
 _METRIC_KEYS = (
     "return",
@@ -248,7 +249,12 @@ def main(argv: list[str] | None = None) -> int:
         "--config", default=None, help="外部实验配置，读 experiment.robustness.drop_p"
     )
     ap.add_argument("--drop-p", default=None, help='显式丢包网格，如 "0.0,0.15,0.3"')
-    ap.add_argument("--flip-p", type=float, default=0.0, help="复测时固定翻转率")
+    ap.add_argument(
+        "--flip-p",
+        type=float,
+        default=None,
+        help="复测时固定翻转率；省略则与训练内评测同口径（train.eval_flip_p 或训练区间中点）",
+    )
     ap.add_argument(
         "--with-extra", action="store_true", help="robust.csv 追加 return/collisions/length"
     )
@@ -292,6 +298,17 @@ def main(argv: list[str] | None = None) -> int:
         if args.list_grid:
             continue
 
+        # 翻转率不能写死 0：训练内评测用的是 train.eval_flip_p 或训练区间中点，
+        # 复测若固定 0 就变成"训练时见过噪声、评测时没有"，两条曲线不可比。
+        if args.flip_p is None:
+            ec_train = (cfg.get("train") or {})
+            flip_p = float(eval_channel(cfg.get("env", {}), ec_train)["flip_p"])
+            flip_src = "训练内评测口径（train.eval_flip_p 或训练区间中点）"
+        else:
+            flip_p = float(args.flip_p)
+            flip_src = "--flip-p"
+        print(f"[INFO] {run_dir.name or run_dir} 固定 flip_p={flip_p:g}（来源：{flip_src}）")
+
         ckpt_path = run_dir / args.ckpt
         if not ckpt_path.exists() and not args.allow_random:
             print(
@@ -304,7 +321,7 @@ def main(argv: list[str] | None = None) -> int:
         rows = []
         for drop_p in grid:
             ec = EnvConfig.from_dict(cfg.get("env", {}))
-            ec.channel = {"drop_p": float(drop_p), "flip_p": float(args.flip_p)}
+            ec.channel = {"drop_p": float(drop_p), "flip_p": flip_p}
             m = evaluate_policy(actor, ec, episodes=args.episodes, seed=args.seed)
             rows.append({"drop_p": float(drop_p), **{k: m[k] for k in cols if k != "drop_p"}})
 

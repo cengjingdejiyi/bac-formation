@@ -157,6 +157,52 @@ def test_missing_run_dir_is_an_error_and_writes_nothing(tmp_path, capsys):
     assert not ghost.exists()
 
 
+def _write_run_cfg(path: Path, grid, flip=None) -> Path:
+    """带 env.channel 的 run 配置，用来验证评测信道口径。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = ["experiment:", "  robustness:", "    drop_p: [" + ", ".join(str(g) for g in grid) + "]"]
+    if flip is not None:
+        lines += ["env:", "  channel:", f"    flip_p: [{flip[0]}, {flip[1]}]"]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+def test_flip_p_defaults_to_training_eval_channel(tmp_path, monkeypatch, capsys):
+    """省略 --flip-p 时取训练内评测口径（区间中点 0.05），不写死 0。"""
+    run = tmp_path / "formation_6n_bac_L4_K3_B2.0_s0"
+    run.mkdir()
+    _write_run_cfg(run / "config.yaml", [0.0], flip=(0.0, 0.1))
+    seen = {}
+
+    def fake_eval(actor, env_cfg, episodes=8, seed=0):
+        seen["flip_p"] = float(env_cfg.channel["flip_p"])
+        return {k: 0.5 for k in evaluate._METRIC_KEYS}
+
+    monkeypatch.setattr(evaluate, "evaluate_policy", fake_eval)
+    monkeypatch.setattr(evaluate, "_load_actor", lambda *a, **k: None)
+    assert evaluate.main(["--run", str(run), "--episodes", "1", "--allow-random"]) == 0
+    assert seen["flip_p"] == 0.05
+    assert "flip_p=0.05" in capsys.readouterr().out
+
+
+def test_flip_p_cli_overrides_training_channel(tmp_path, monkeypatch):
+    run = tmp_path / "formation_6n_bac_L4_K3_B2.0_s0"
+    run.mkdir()
+    _write_run_cfg(run / "config.yaml", [0.0], flip=(0.0, 0.1))
+    seen = {}
+
+    def fake_eval(actor, env_cfg, episodes=8, seed=0):
+        seen["flip_p"] = float(env_cfg.channel["flip_p"])
+        return {k: 0.5 for k in evaluate._METRIC_KEYS}
+
+    monkeypatch.setattr(evaluate, "evaluate_policy", fake_eval)
+    monkeypatch.setattr(evaluate, "_load_actor", lambda *a, **k: None)
+    assert evaluate.main(
+        ["--run", str(run), "--episodes", "1", "--allow-random", "--flip-p", "0.2"]
+    ) == 0
+    assert seen["flip_p"] == 0.2
+
+
 def test_invalid_drop_p_is_an_error_not_a_fallback(tmp_path, capsys):
     """显式给了 --drop-p 却解析不出来，不能悄悄退回仓库默认网格。"""
     run = tmp_path / "formation_6n_bac_L4_K3_B2.0_s0"
