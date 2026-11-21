@@ -29,7 +29,13 @@ def _opt(module):
     return torch.optim.Adam(module.parameters(), lr=0.1)
 
 
-def _ckpt(path: Path, steps: int, beta: float, scaler: dict | None = None):
+def _ckpt(
+    path: Path,
+    steps: int,
+    beta: float,
+    scaler: dict | None = None,
+    episodes: dict | None = None,
+):
     actor, critic = _Tiny(), _Tiny()
     opt = _opt(actor)
     with torch.no_grad():
@@ -37,13 +43,18 @@ def _ckpt(path: Path, steps: int, beta: float, scaler: dict | None = None):
     actor.w.sum().backward()  # 走一步，Adam 才有动量可存
     opt.step()
     saved = actor.w.detach().clone()
+    extra = {}
+    if scaler:
+        extra["scaler"] = scaler
+    if episodes:
+        extra["episodes"] = episodes
     save_checkpoint(
         path,
         actor,
         critic,
         meta={"steps": steps, "beta": beta},
         optimizer=opt,
-        extra={"scaler": scaler} if scaler else None,
+        extra=extra or None,
     )
     return path, saved
 
@@ -54,12 +65,13 @@ def test_restore_brings_back_beta_optimizer_scaler_and_steps(tmp_path):
         8,
         0.37,
         {"n": 5, "mean": 1.5, "m2": 2.0, "eps": 1e-8},
+        {"recent": [{"ret": -1.0, "len": 4}], "count": 3, "ret_sum": -7.0, "ret_n": 3},
     )
     actor, critic = _Tiny(), _Tiny()
     opt = _opt(actor)
     dual = BetaDual(beta=0.0, lr=0.05, b_max=2.0)
     scaler = RunningStd()
-    steps = train_mod._restore_run(
+    state = train_mod._restore_run(
         {"resume_from": str(path), "reward_norm": True},
         actor,
         critic,
@@ -67,7 +79,10 @@ def test_restore_brings_back_beta_optimizer_scaler_and_steps(tmp_path):
         dual,
         scaler,
     )
-    assert steps == 8
+    assert state["steps"] == 8
+    assert state["count"] == 3
+    assert state["ret_sum"] == pytest.approx(-7.0) and state["ret_n"] == 3
+    assert len(state["recent"]) == 1
     assert dual.beta == pytest.approx(0.37)
     assert torch.allclose(actor.w, saved_w)  # 权重已载入
     assert opt.state_dict()["state"]  # 优化器动量不是空的
@@ -79,8 +94,18 @@ def test_restore_is_a_noop_without_resume_from():
     actor, critic = _Tiny(), _Tiny()
     opt = _opt(actor)
     dual = BetaDual(beta=0.1, lr=0.05, b_max=2.0)
-    assert train_mod._restore_run({}, actor, critic, opt, dual, RunningStd()) == 0
+    state = train_mod._restore_run({}, actor, critic, opt, dual, RunningStd())
+    assert state == {"steps": 0, "recent": [], "count": 0, "ret_sum": 0.0, "ret_n": 0}
     assert dual.beta == pytest.approx(0.1)
+
+
+def test_restore_tolerates_old_ckpt_without_episode_window(tmp_path):
+    """旧 ckpt 没有 episodes 段：不报错，窗口与累计值从空/0 开始。"""
+    path, _ = _ckpt(tmp_path / "old.ckpt", 6, 0.2)
+    state = train_mod._restore_run(
+        {"resume_from": str(path)}, _Tiny(), _Tiny(), None, BetaDual(), None
+    )
+    assert state["steps"] == 6 and state["recent"] == [] and state["ret_n"] == 0
 
 
 def test_restore_rejects_a_missing_checkpoint(tmp_path):

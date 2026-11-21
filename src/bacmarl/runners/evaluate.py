@@ -135,13 +135,22 @@ def parse_grid(text: str | None) -> list[float] | None:
 
 
 def evaluate_policy(
-    actor, env_cfg: EnvConfig, episodes: int = 8, seed: int = 0
+    actor,
+    env_cfg: EnvConfig,
+    episodes: int = 8,
+    seed: int = 0,
+    gate_mode: str = "threshold",
 ) -> dict:
     """用确定性策略跑固定回合，返回各指标均值。
 
-    动作取 argmax；门控取 p>=0.5（`Actor.forward(deterministic=True)`）；
+    动作取 argmax；门控口径由 `gate_mode` 决定：
+    - `threshold`（默认，历史口径）：`p>=0.5` 判发言（`Actor.forward(deterministic=True)`），
+      与训练采样相比会把发言率抬高（实测 0.48 → 0.88），所以评测 bits 只作"确定性上界"；
+    - `sample`：按同一策略采样门控（`deterministic=False`），与训练分布同口径，预算比较应看这个。
     每回合隐状态从零开始，回合内不重置。actor 为 None 时退化为均匀随机动作。
     """
+    if gate_mode not in ("threshold", "sample"):
+        raise ValueError("gate_mode must be threshold or sample")
     import torch
 
     n = env_cfg.n_agents
@@ -165,7 +174,7 @@ def evaluate_policy(
                             torch.as_tensor(step.comm_mask)[None],
                             hidden,
                             dict(step.info["channel"]),
-                            deterministic=True,
+                            deterministic=(gate_mode == "threshold"),
                         )
                     hidden = out.h
                     action = out.action_logits.argmax(-1)[0].numpy()
@@ -276,6 +285,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out", default=None, help="输出 csv 路径（仅单 run 时有效）")
     ap.add_argument("--list-grid", action="store_true", help="只打印网格并退出")
     ap.add_argument(
+        "--gate-mode",
+        choices=("threshold", "sample"),
+        default="threshold",
+        help="门控口径：threshold=确定性 p>=0.5（历史默认，发言率偏高）；"
+        "sample=按策略采样，与训练分布同口径，预算比较用它",
+    )
+    ap.add_argument(
         "--allow-random",
         action="store_true",
         help="显式允许缺 checkpoint 时用随机策略出对照行（默认缺 ckpt 直接失败）",
@@ -358,16 +374,29 @@ def main(argv: list[str] | None = None) -> int:
                 )
         else:
             actor = _load_actor(run_dir, cfg, args.ckpt)
+        if actor is None:
+            print(
+                f"[WARN] {run_dir.name or run_dir} 用随机策略出表（--allow-random），"
+                "这份 robust.csv 不得进正式汇总"
+            )
+        out_csv = Path(args.out) if args.out else run_dir / "robust.csv"
+        if actor is None and out_csv.exists() and args.out is None:
+            print(f"[WARN] 将用随机策略覆盖已有 {out_csv}（建议用 --out 另存）")
         rows = []
         for drop_p in grid:
             ec = EnvConfig.from_dict(cfg.get("env", {}))
             ec.channel = {"drop_p": float(drop_p), "flip_p": flip_p}
-            m = evaluate_policy(actor, ec, episodes=args.episodes, seed=args.seed)
+            m = evaluate_policy(
+                actor,
+                ec,
+                episodes=args.episodes,
+                seed=args.seed,
+                gate_mode=args.gate_mode,
+            )
             rows.append(
                 {"drop_p": float(drop_p), **{k: m[k] for k in cols if k != "drop_p"}}
             )
 
-        out_csv = Path(args.out) if args.out else run_dir / "robust.csv"
         out_csv.parent.mkdir(parents=True, exist_ok=True)
         with open(out_csv, "w", newline="", encoding="utf-8") as f:
             w = csv.DictWriter(f, fieldnames=cols)

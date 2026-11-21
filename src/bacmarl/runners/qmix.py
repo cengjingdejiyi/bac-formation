@@ -64,7 +64,14 @@ class GreedyQPolicy:
         return self.agent.init_hidden(b, n, device)
 
     def __call__(
-        self, obs, obs_mask, comm_mask, h_prev, channel, gate=None, noise=None,
+        self,
+        obs,
+        obs_mask,
+        comm_mask,
+        h_prev,
+        channel,
+        gate=None,
+        noise=None,
         deterministic: bool = True,
     ):
         q, h = self.agent.q_values(obs, obs_mask, h_prev)
@@ -81,13 +88,24 @@ class GreedyQPolicy:
 
 
 def _episode_mean(episodes: list[dict], key: str) -> float:
+    """回合字段均值；缺字段（如 toy 环境没给 formation_err_mean）返回 nan，不抛 KeyError。"""
     if not episodes:
         return float("nan")
-    return float(np.mean([ep[key] for ep in episodes]))
+    values = [ep.get(key) for ep in episodes if ep.get(key) is not None]
+    if not values:
+        return float("nan")
+    return float(np.mean(values))
 
 
-def _save_ckpt(path: Path, agent: QMixAgent, target: QMixAgent, opt, cfg: dict,
-               steps: int, epsilon: float) -> Path:
+def _save_ckpt(
+    path: Path,
+    agent: QMixAgent,
+    target: QMixAgent,
+    opt,
+    cfg: dict,
+    steps: int,
+    epsilon: float,
+) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
         {
@@ -101,8 +119,9 @@ def _save_ckpt(path: Path, agent: QMixAgent, target: QMixAgent, opt, cfg: dict,
     return path
 
 
-def load_qmix_checkpoint(path: str | Path, agent: QMixAgent | None = None,
-                         optimizer=None) -> dict:
+def load_qmix_checkpoint(
+    path: str | Path, agent: QMixAgent | None = None, optimizer=None
+) -> dict:
     """读 QMIX checkpoint；给了 agent/optimizer 就原地恢复。"""
     ckpt = torch.load(Path(path), map_location="cpu", weights_only=False)
     if agent is not None and "agent" in ckpt:
@@ -134,11 +153,15 @@ def main(argv: list[str] | None = None) -> int:
     tokens = [a for a in argv if not a.startswith("--")]
     cfg = load_config(tokens)
     if torch is None:
-        print("[ERR] QMIX 训练需要 PyTorch：pip install -r requirements.txt",
-              file=sys.stderr)
+        print(
+            "[ERR] QMIX 训练需要 PyTorch：pip install -r requirements.txt",
+            file=sys.stderr,
+        )
         return 1
     if (cfg.get("algo") or {}).get("comm") != "none":
-        print("[ERR] QMIX 只能配 algo.comm=none（QMIX 不使用通信模块）", file=sys.stderr)
+        print(
+            "[ERR] QMIX 只能配 algo.comm=none（QMIX 不使用通信模块）", file=sys.stderr
+        )
         return 1
     set_seed(int(cfg["seed"]))
     tr = cfg["train"]
@@ -171,7 +194,9 @@ def _train(cfg: dict, vec: VecFormationEnv, robust: bool = False) -> int:
     train_every = max(1, int(algo.get("train_every", 4)))
     updates_per_train = max(1, int(algo.get("updates_per_train", 1)))
     target_update = max(1, int(algo.get("target_update", 500)))
-    eps_start, eps_end = float(algo.get("eps_start", 1.0)), float(algo.get("eps_end", 0.05))
+    eps_start, eps_end = float(algo.get("eps_start", 1.0)), float(
+        algo.get("eps_end", 0.05)
+    )
     eps_anneal = int(algo.get("eps_anneal_steps", 100000))
     grad_clip = float(algo.get("grad_clip", 10.0))
     double_q = bool(algo.get("double_q", True))
@@ -182,7 +207,9 @@ def _train(cfg: dict, vec: VecFormationEnv, robust: bool = False) -> int:
     exp_name = (cfg.get("experiment") or {}).get("name", "main")
     run_dir = ROOT / "results" / exp_name / run_name(cfg)
     if (run_dir / "metrics.csv").exists() and not tr.get("resume_from"):
-        print(f"[WARN] {run_dir} 已有 metrics.csv，本次会覆盖（换 experiment.name 可避开）")
+        print(
+            f"[WARN] {run_dir} 已有 metrics.csv，本次会覆盖（换 experiment.name 可避开）"
+        )
     logger = RunLogger(run_dir)
     dump_yaml(cfg, run_dir / "config.yaml")
 
@@ -219,14 +246,15 @@ def _train(cfg: dict, vec: VecFormationEnv, robust: bool = False) -> int:
     h_prev = agent.init_hidden(b, n)
     recent_episodes: list[dict] = []
     episode_count = 0
+    ret_sum, ret_n = 0.0, 0
     updates = 0
     last_stats = None
     window_rewards: list[float] = []
     last_log = 0
 
     print(
-        f'[INFO] run_dir={run_dir}\n[INFO] comm=none(QMIX) N={n} B={b} hidden={hidden} '
-        f'backend={vec.envs[0].backend}'
+        f"[INFO] run_dir={run_dir}\n[INFO] comm=none(QMIX) N={n} B={b} hidden={hidden} "
+        f"backend={vec.envs[0].backend}"
     )
     try:
         while steps < total:
@@ -248,8 +276,13 @@ def _train(cfg: dict, vec: VecFormationEnv, robust: bool = False) -> int:
             # n 步回报：逐环境折叠，凑满 n 步或遇到终止就写回 replay。
             h_np = h_prev.numpy()
             for k in range(b):
-                window.set_tail(k, nxt["obs"][k], nxt["obs_mask"][k],
-                                h_out[k].numpy(), nxt["state"][k])
+                window.set_tail(
+                    k,
+                    nxt["obs"][k],
+                    nxt["obs_mask"][k],
+                    h_out[k].numpy(),
+                    nxt["state"][k],
+                )
                 for rec in window.push(
                     k,
                     {
@@ -264,15 +297,14 @@ def _train(cfg: dict, vec: VecFormationEnv, robust: bool = False) -> int:
                 ):
                     replay.push(**rec)
             window_rewards.extend(float(r) for r in reward)
-            h_prev = h_out.masked_fill(
-                torch.as_tensor(nxt["done"])[:, None, None], 0.0
-            )
+            h_prev = h_out.masked_fill(torch.as_tensor(nxt["done"])[:, None, None], 0.0)
             batch = nxt
             steps += b
-            episode_count += len([ep for ep in nxt.get("ep", []) if ep is not None])
-            recent_episodes = (
-                recent_episodes + [ep for ep in nxt.get("ep", []) if ep is not None]
-            )[-100:]
+            new_eps = [ep for ep in nxt.get("ep", []) if ep is not None]
+            episode_count += len(new_eps)
+            recent_episodes = (recent_episodes + new_eps)[-100:]
+            ret_sum += float(sum(ep["ret"] for ep in new_eps))
+            ret_n += len(new_eps)
 
             if len(replay) >= train_start and steps % train_every == 0:
                 for _ in range(updates_per_train):
@@ -296,23 +328,40 @@ def _train(cfg: dict, vec: VecFormationEnv, robust: bool = False) -> int:
                     was_training = agent.training
                     agent.eval()
                     eval_metrics = evaluate_policy(
-                        GreedyQPolicy(agent), eval_cfg, episodes=eval_episodes,
+                        GreedyQPolicy(agent),
+                        eval_cfg,
+                        episodes=eval_episodes,
                         seed=int(cfg["seed"]),
                     )
                     agent.train(was_training)
                     next_eval = steps + eval_every
                     _save_ckpt(
-                        run_dir / "ckpt" / f"step_{steps}.ckpt", agent, target, opt,
-                        cfg, steps, epsilon,
+                        run_dir / "ckpt" / f"step_{steps}.ckpt",
+                        agent,
+                        target,
+                        opt,
+                        cfg,
+                        steps,
+                        epsilon,
                     )
                 row = {
                     "train/return": _episode_mean(recent_episodes, "ret"),
+                    "train/return_all": (ret_sum / ret_n) if ret_n else float("nan"),
                     "train/success_rate": _episode_mean(recent_episodes, "success"),
-                    "train/formation_err": _episode_mean(recent_episodes, "formation_err"),
+                    "train/formation_err": _episode_mean(
+                        recent_episodes, "formation_err"
+                    ),
+                    "train/formation_err_mean": _episode_mean(
+                        recent_episodes, "formation_err_mean"
+                    ),
                     "train/collisions": _episode_mean(recent_episodes, "collisions"),
                     "train/episode_length": _episode_mean(recent_episodes, "len"),
                     "train/episodes": episode_count,
-                    "train/step_reward": float(np.mean(window_rewards)) if window_rewards else float("nan"),
+                    "train/step_reward": (
+                        float(np.mean(window_rewards))
+                        if window_rewards
+                        else float("nan")
+                    ),
                     # 列与策略梯度方法保持同构：QMIX 不通信，这些恒为 0。
                     "comm/bits": 0.0,
                     "comm/speak_rate": 0.0,
@@ -330,8 +379,15 @@ def _train(cfg: dict, vec: VecFormationEnv, robust: bool = False) -> int:
                 window_rewards = []
                 last_log = steps
 
-        _save_ckpt(run_dir / "ckpt" / "last.ckpt", agent, target, opt, cfg, steps,
-                   epsilon_at(steps, eps_start, eps_end, eps_anneal))
+        _save_ckpt(
+            run_dir / "ckpt" / "last.ckpt",
+            agent,
+            target,
+            opt,
+            cfg,
+            steps,
+            epsilon_at(steps, eps_start, eps_end, eps_anneal),
+        )
         print(f"[DONE] steps={steps} updates={updates} csv={logger.csv_path}")
 
         if robust:
@@ -341,12 +397,13 @@ def _train(cfg: dict, vec: VecFormationEnv, robust: bool = False) -> int:
     return 0
 
 
-def _write_robust(agent: QMixAgent, cfg: dict, run_dir: Path, episodes: int = 8) -> Path:
+def _write_robust(
+    agent: QMixAgent, cfg: dict, run_dir: Path, episodes: int = 8
+) -> Path:
     """按丢包率网格复测并写 `robust.csv`（契约 5 列，供 E 的作图脚本直接用）。"""
-    grid = (
-        ((cfg.get("experiment") or {}).get("robustness") or {}).get("drop_p")
-        or list(ROBUST_GRID)
-    )
+    grid = ((cfg.get("experiment") or {}).get("robustness") or {}).get(
+        "drop_p"
+    ) or list(ROBUST_GRID)
     policy = GreedyQPolicy(agent)
     rows = []
     for drop_p in grid:
@@ -359,7 +416,7 @@ def _write_robust(agent: QMixAgent, cfg: dict, run_dir: Path, episodes: int = 8)
                 "success_rate": m["success_rate"],
                 "formation_err": m["formation_err"],
                 "speak_rate": 0.0,  # QMIX 无门控
-                "bits": 0.0,        # QMIX 不通信
+                "bits": 0.0,  # QMIX 不通信
             }
         )
     out = run_dir / "robust.csv"

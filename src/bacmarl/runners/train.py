@@ -61,16 +61,17 @@ def validate_norm_cfg(tr: dict) -> None:
         )
 
 
-def _restore_run(tr: dict, actor, critic, opt, dual, scaler) -> int:
-    """按 `train.resume_from` 恢复权重、优化器、β 与奖励缩放统计，返回起始步数。
+def _restore_run(tr: dict, actor, critic, opt, dual, scaler) -> dict:
+    """按 `train.resume_from` 恢复权重、优化器、β、缩放统计与回合日志状态。
 
-    β 是唯一的对偶状态（`meta["beta"]`），不恢复它会让续训后的预算约束断档；
-    优化器与 Welford 统计同理，缺了它们只能算「换权重接着跑」，不是续训。
-    回合级日志窗口（recent_episodes / episode_count）不恢复，只影响曲线开头的平滑。
+    返回 {"steps", "recent", "count", "ret_sum", "ret_n"}。β 是对偶状态（`meta["beta"]`），
+    优化器与 Welford 统计是训练状态，回合窗口/累计回报是日志状态——缺了任何一项都只能算
+    「换权重接着跑」。旧 ckpt 没有 `episodes` 段时不报错，窗口与累计值从空/0 开始。
     """
+    empty = {"steps": 0, "recent": [], "count": 0, "ret_sum": 0.0, "ret_n": 0}
     resume = tr.get("resume_from")
     if not resume:
-        return 0
+        return empty
     path = Path(str(resume))
     if not path.is_absolute():
         path = ROOT / path
@@ -82,9 +83,19 @@ def _restore_run(tr: dict, actor, critic, opt, dual, scaler) -> int:
         dual.load_state_dict({"beta": meta["beta"]})
     if scaler is not None and "scaler" in ckpt:
         scaler.load_state_dict(ckpt["scaler"])
-    steps = int(meta.get("steps", 0))
-    print(f"[INFO] resumed {path.name}: steps={steps} beta={dual.beta:.3f}")
-    return steps
+    eps = ckpt.get("episodes") or {}
+    state = {
+        "steps": int(meta.get("steps", 0)),
+        "recent": list(eps.get("recent") or [])[-100:],
+        "count": int(eps.get("count", 0)),
+        "ret_sum": float(eps.get("ret_sum", 0.0)),
+        "ret_n": int(eps.get("ret_n", 0)),
+    }
+    print(
+        f"[INFO] resumed {path.name}: steps={state['steps']} beta={dual.beta:.3f} "
+        f"episodes={state['count']} window={len(state['recent'])}"
+    )
+    return state
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -156,8 +167,15 @@ def _train(cfg: dict, vec: VecFormationEnv, torch) -> int:
     )
     # 奖励尺度归一化：只缩放训练用的 shaped reward，价值目标与自举同尺度。
     scaler = RunningStd() if tr.get("reward_norm", True) else None
-    start_steps = _restore_run(tr, actor, critic, opt, dual, scaler)
-
+    # 训练内评测的门控口径：threshold（确定性 p>=0.5，历史默认）| sample（按策略采样）。
+    eval_gate_mode = str(tr.get("eval_gate_mode", "threshold"))
+    if eval_gate_mode not in ("threshold", "sample"):
+        raise ValueError("train.eval_gate_mode must be threshold or sample")
+    restored = _restore_run(tr, actor, critic, opt, dual, scaler)
+    start_steps = restored["steps"]
+    recent_episodes = restored["recent"]
+    episode_count = restored["count"]
+    ret_sum, ret_n = restored["ret_sum"], restored["ret_n"]
     try:
         steps, total = start_steps, int(tr["total_env_steps"])
         rollout_len = int(tr["rollout_len"])
@@ -173,8 +191,6 @@ def _train(cfg: dict, vec: VecFormationEnv, torch) -> int:
         )
         batch = vec.reset()
         h = actor.init_hidden(b, n)
-        recent_episodes = []
-        episode_count = 0
         while steps < total:
             length = min(rollout_len, (total - steps + b - 1) // b)
             buf = RolloutBuffer(
@@ -219,6 +235,8 @@ def _train(cfg: dict, vec: VecFormationEnv, torch) -> int:
             beta = dual.update(float(buf.bits.mean()))
             episode_count += len(rollout.episodes)
             recent_episodes = (recent_episodes + rollout.episodes)[-100:]
+            ret_sum += float(sum(ep["ret"] for ep in rollout.episodes))
+            ret_n += len(rollout.episodes)
 
             def episode_mean(key: str) -> float:
                 return (
@@ -227,11 +245,22 @@ def _train(cfg: dict, vec: VecFormationEnv, torch) -> int:
                     else float("nan")
                 )
 
+            ep_extra = {
+                "recent": recent_episodes[-100:],
+                "count": episode_count,
+                "ret_sum": ret_sum,
+                "ret_n": ret_n,
+            }
+
             if eval_every > 0 and steps >= next_eval and eval_cfg is not None:
                 was_training = actor.training
                 actor.eval()
                 eval_metrics = evaluate_policy(
-                    actor, eval_cfg, episodes=eval_episodes, seed=int(cfg["seed"])
+                    actor,
+                    eval_cfg,
+                    episodes=eval_episodes,
+                    seed=int(cfg["seed"]),
+                    gate_mode=eval_gate_mode,
                 )
                 actor.train(was_training)
                 next_eval = steps + eval_every
@@ -242,7 +271,10 @@ def _train(cfg: dict, vec: VecFormationEnv, torch) -> int:
                     critic,
                     meta={"cfg": cfg, "steps": steps, "beta": dual.beta},
                     optimizer=opt,
-                    extra={"scaler": scaler.state_dict()} if scaler else None,
+                    extra={
+                        "scaler": scaler.state_dict() if scaler else None,
+                        "episodes": ep_extra,
+                    },
                 )
                 print(f"[INFO] eval@{steps} {eval_metrics} -> {ckpt_path.name}")
             else:
@@ -252,8 +284,10 @@ def _train(cfg: dict, vec: VecFormationEnv, torch) -> int:
             logger.log(
                 {
                     "train/return": episode_mean("ret"),
+                    "train/return_all": (ret_sum / ret_n) if ret_n else float("nan"),
                     "train/success_rate": episode_mean("success"),
                     "train/formation_err": episode_mean("formation_err"),
+                    "train/formation_err_mean": episode_mean("formation_err_mean"),
                     "train/collisions": episode_mean("collisions"),
                     "train/episode_length": episode_mean("len"),
                     "train/episodes": episode_count,
@@ -274,7 +308,10 @@ def _train(cfg: dict, vec: VecFormationEnv, torch) -> int:
             critic,
             meta={"cfg": cfg, "steps": steps, "beta": dual.beta},
             optimizer=opt,
-            extra={"scaler": scaler.state_dict()} if scaler else None,
+            extra={
+                "scaler": scaler.state_dict() if scaler else None,
+                "episodes": ep_extra,
+            },
         )
         print(f"[DONE] steps={steps} beta={dual.beta:.3f} csv={logger.csv_path}")
     finally:

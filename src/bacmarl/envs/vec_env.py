@@ -27,7 +27,7 @@ class VecFormationEnv:
             raise
         self._seeds = [seed + 1000 * k for k in range(self.n_envs)]
         self._eps_stats = [
-            {"ret": 0.0, "len": 0, "coll": 0, "success": False}
+            {"ret": 0.0, "len": 0, "coll": 0, "success": False, "ferr": 0.0}
             for _ in range(self.n_envs)
         ]
 
@@ -47,7 +47,7 @@ class VecFormationEnv:
         """复现初始批次，obs [B,N,D]；回合内自动 reset 不重新播种。"""
         steps = [e.reset(seed=s) for e, s in zip(self.envs, self._seeds)]
         for st in self._eps_stats:
-            st.update({"ret": 0.0, "len": 0, "coll": 0, "success": False})
+            st.update({"ret": 0.0, "len": 0, "coll": 0, "success": False, "ferr": 0.0})
         return self._stack(steps)
 
     def step(self, actions: np.ndarray) -> dict:
@@ -67,6 +67,8 @@ class VecFormationEnv:
             cur["len"] += 1
             cur["coll"] += st.info["collisions"]
             cur["success"] = cur["success"] or st.info["success"]
+            # 过程均值：与 train/step_reward（每步均值）同口径，避免和"回合末 ferr"混淆。
+            cur["ferr"] += float(st.info["formation_err"])
             if st.done:
                 st.info["ep"] = {
                     "ret": cur["ret"],
@@ -74,13 +76,20 @@ class VecFormationEnv:
                     "collisions": cur["coll"],
                     "success": cur["success"],
                     "formation_err": st.info["formation_err"],
+                    "formation_err_mean": cur["ferr"] / max(cur["len"], 1),
                 }
                 terminal = st
                 initial = env.reset()  # 延续 RNG，保持复现且不重复同一个回合。
                 initial.info["ep"] = terminal.info["ep"]
                 initial.info["terminal_step"] = terminal
                 st = replace(initial, reward=terminal.reward, done=True)
-                self._eps_stats[k] = {"ret": 0.0, "len": 0, "coll": 0, "success": False}
+                self._eps_stats[k] = {
+                    "ret": 0.0,
+                    "len": 0,
+                    "coll": 0,
+                    "success": False,
+                    "ferr": 0.0,
+                }
             else:
                 st.info["ep"] = None
             steps.append(st)

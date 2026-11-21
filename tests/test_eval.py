@@ -82,3 +82,28 @@ def test_train_writes_eval_metrics_and_periodic_checkpoint(tmp_path, monkeypatch
 
     ckpts = sorted((csv_path.parent / "ckpt").glob("step_*.ckpt"))
     assert len(ckpts) >= 2, [p.name for p in ckpts]
+
+    # 新增指标：全程累计回报与回合内 ferr 均值必须落列，且与旧口径分开
+    for key in ("train/return_all", "train/formation_err_mean", "train/value_scale"):
+        assert key in rows[0], f"缺少列 {key}"
+    assert all(row["train/return_all"] not in ("", "nan") for row in rows)
+
+    # 续训窗口：ckpt 里必须带 episodes 段，续训才能接上曲线
+    import torch
+
+    ckpt = torch.load(ckpts[-1], map_location="cpu", weights_only=False)
+    assert "episodes" in ckpt and "recent" in ckpt["episodes"]
+    assert int(ckpt["episodes"]["count"]) >= 1
+    assert int(ckpt["episodes"]["ret_n"]) >= 1
+
+
+def test_gate_mode_sample_is_supported_and_invalid_mode_rejected():
+    cfg = EnvConfig(backend="mock", n_agents=3, max_steps=6, channel={"drop_p": 0.0})
+    with FormationCommEnv(cfg) as env:
+        actor = _actor(env)
+    sampled = evaluate_policy(actor, cfg, episodes=2, seed=5, gate_mode="sample")
+    assert set(sampled) == set(_METRIC_KEYS)
+    for key in _METRIC_KEYS:
+        assert np.isfinite(sampled[key]) or np.isnan(sampled[key])
+    with pytest.raises(ValueError, match="threshold or sample"):
+        evaluate_policy(actor, cfg, episodes=1, seed=0, gate_mode="bogus")

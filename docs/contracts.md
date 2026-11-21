@@ -136,6 +136,9 @@ class Critic(nn.Module):
 | algo.budget_bits | 比特预算 b_max | A |
 | algo.beta_init, algo.beta_lr | β 初值与对偶步长 | A |
 | train.* | 总步数、并行环境数、采样长度、PPO 超参 | C |
+| train.value_norm | 价值回归目标按回合回报 std 缩放（默认 true，O(1) 量级）；与 reward_norm 互斥 | C |
+| train.reward_norm | 每步奖励按滑动 std 缩放；`scale(min_std=1.0)` 只缩小不放大，本任务恒为 1.0 → 默认 false | C |
+| train.eval_gate_mode | threshold（p≥0.5，历史口径）\| sample（与训练分布同口径） | E |
 | seed | 随机种子 | E |
 
 - 所有方法共用 `train.*`，只允许改 `algo.*`。
@@ -158,9 +161,11 @@ class Critic(nn.Module):
 
 | 指标名 | 含义 |
 |---|---|
-| train/return, eval/return | 回合团队回报（不含通信代价） |
+| train/return, eval/return | 回合团队回报（不含通信代价）；`train/return` 是最近 100 回合滑动均值 |
+| train/return_all | 全程累计回合回报均值（续训继承），报告里写"平均回合回报"用它 |
 | train/success_rate, eval/success_rate | 完成率 |
 | train/formation_err, eval/formation_err | 终止时刻编队误差 |
+| train/formation_err_mean | 回合内每步编队误差均值（与 `train/step_reward` 同口径） |
 | train/collisions, eval/collisions | 每回合违反安全距离次数 |
 | comm/bits | 每机每步平均发送比特数 |
 | comm/speak_rate | 门控发言率 |
@@ -175,6 +180,7 @@ class Critic(nn.Module):
   - `--ckpt` 是**相对 run 目录**的路径，默认 `ckpt/last.ckpt`；只看该 run 自己的目录，不跨 run 查找。
   - `--run` 目录不存在直接返回 2（不 `mkdir`）；缺 ckpt 返回 3；**ckpt 存在但加载失败返回 4**（维度/hidden/通信模块不符或文件损坏都不许静默退化成随机策略）；确实要做随机策略对照必须显式 `--allow-random`（日志会打 `[WARN] 退化为随机策略`，这种 `robust.csv` 不得进正式汇总）。
   - `--drop-p` / `--flip-p` 的概率必须落在 `[0,1]`，越界直接 `[FAIL]` 返回 2（以前 `1.5` 也能跑出一份看似正常的对照表）。
+  - `--gate-mode {threshold,sample}`：`threshold`（默认，历史口径）按 `p≥0.5` 判发言，会把发言率抬高（实测 0.48 → 0.88）；`sample` 与训练分布同口径，**预算合规比较必须用 sample**。训练内评测由 `train.eval_gate_mode` 指定。
   - `--out` 只能配单个 `--run`；多 run 时各自写自己的 `robust.csv`。
 - 作图：只读 `metrics.csv` 与 `robust.csv`，曲线为多种子均值 ± 标准差；`scripts/make_figures.py` 默认输出到 `results/figures/`（`train_eval_metrics.png`、`comm_metrics.png`、`robust_drop.png`、`curves_return.png`）。图例 label 取「相对 `--results` 的目录链 + run 名」（如 `main/formation_6n_bac_L4_K3_B2.0`），不同实验组里同名的 run 不得合并成多 seed。
 

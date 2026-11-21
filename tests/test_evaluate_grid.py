@@ -191,7 +191,7 @@ def test_flip_p_defaults_to_training_eval_channel(tmp_path, monkeypatch, capsys)
     _write_run_cfg(run / "config.yaml", [0.0], flip=(0.0, 0.1))
     seen = {}
 
-    def fake_eval(actor, env_cfg, episodes=8, seed=0):
+    def fake_eval(actor, env_cfg, episodes=8, seed=0, gate_mode="threshold"):
         seen["flip_p"] = float(env_cfg.channel["flip_p"])
         return {k: 0.5 for k in evaluate._METRIC_KEYS}
 
@@ -208,7 +208,7 @@ def test_flip_p_cli_overrides_training_channel(tmp_path, monkeypatch):
     _write_run_cfg(run / "config.yaml", [0.0], flip=(0.0, 0.1))
     seen = {}
 
-    def fake_eval(actor, env_cfg, episodes=8, seed=0):
+    def fake_eval(actor, env_cfg, episodes=8, seed=0, gate_mode="threshold"):
         seen["flip_p"] = float(env_cfg.channel["flip_p"])
         return {k: 0.5 for k in evaluate._METRIC_KEYS}
 
