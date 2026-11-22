@@ -295,12 +295,14 @@ def _train(cfg: dict, vec: VecFormationEnv, torch) -> int:
                     "train/reward_scale": float(scaler.scale()) if scaler else 1.0,
                     "train/value_scale": value_scale,
                     "comm/bits": float(buf.bits.mean()),
-                    # 无通信方法（IPPO/MAPPO）没有门控头，Actor 里 gate 恒为 ones，
-                    # 直接取均值会报成"发言率 100%"，与 `comm/bits=0` 自相矛盾。
-                    # 这里按 comm 配置归零（QMIX 入口一直是硬编码 0.0，口径对齐）。
+                    # 发言率口径：有门控头就用门控概率；没有门控头但确实在发
+                    # （tarmac 恒发 1024 bit）记 1.0；完全不发（IPPO/MAPPO/QMIX）记 0。
+                    # 旧逻辑直接取 gate 均值，而 Actor 里 gate 缺省是占位 ones，
+                    # 于是"bits=0 但发言率 100%"会同时出现在同一张表里。
                     "comm/speak_rate": (
-                        0.0 if str(cfg["algo"].get("comm", "bac")) == "none"
-                        else float(buf.gate.mean())
+                        float(buf.gate.mean())
+                        if getattr(comm, "has_gate", False)
+                        else (1.0 if float(buf.bits.mean()) > 0 else 0.0)
                     ),
                     "comm/beta": beta,
                     **{f"eval/{k}": v for k, v in eval_metrics.items()},
