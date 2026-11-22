@@ -1,0 +1,16 @@
+# 统一换行与编码，避免跨平台脚本/数据被改写
+* text=auto
+
+# Shell 脚本必须 LF，否则 Git Bash / WSL 下报 "$'\r': command not found"
+*.sh text eol=lf
+
+# PowerShell 脚本走 CRLF；setup_env.ps1 另存为 UTF-8 with BOM（PS 5.1 对中文注释必需）
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+
+# 二进制资源不做文本转换
+*.png binary
+*.jpg binary
+*.zip binary
+*.ckpt binary
+*.pt binary
