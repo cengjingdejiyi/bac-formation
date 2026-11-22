@@ -295,7 +295,13 @@ def _train(cfg: dict, vec: VecFormationEnv, torch) -> int:
                     "train/reward_scale": float(scaler.scale()) if scaler else 1.0,
                     "train/value_scale": value_scale,
                     "comm/bits": float(buf.bits.mean()),
-                    "comm/speak_rate": float(buf.gate.mean()),
+                    # 无通信方法（IPPO/MAPPO）没有门控头，Actor 里 gate 恒为 ones，
+                    # 直接取均值会报成"发言率 100%"，与 `comm/bits=0` 自相矛盾。
+                    # 这里按 comm 配置归零（QMIX 入口一直是硬编码 0.0，口径对齐）。
+                    "comm/speak_rate": (
+                        0.0 if str(cfg["algo"].get("comm", "bac")) == "none"
+                        else float(buf.gate.mean())
+                    ),
                     "comm/beta": beta,
                     **{f"eval/{k}": v for k, v in eval_metrics.items()},
                     **logs,

@@ -179,7 +179,9 @@ def evaluate_policy(
                     hidden = out.h
                     action = out.action_logits.argmax(-1)[0].numpy()
                     bits.append(float(out.bits.mean()))
-                    if out.gate is not None:
+                    # 只有真的有门控头才统计发言率；无通信方法的 gate 是占位 ones，
+                    # 记成 1.0 会让"speak_rate=100% 但 bits=0"出现在同一张表里。
+                    if out.gate_logits is not None:
                         gates.append(float(out.gate.mean()))
                 else:
                     action = rng.integers(0, 5, size=n)

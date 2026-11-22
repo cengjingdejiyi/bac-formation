@@ -107,3 +107,25 @@ def test_gate_mode_sample_is_supported_and_invalid_mode_rejected():
         assert np.isfinite(sampled[key]) or np.isnan(sampled[key])
     with pytest.raises(ValueError, match="threshold or sample"):
         evaluate_policy(actor, cfg, episodes=1, seed=0, gate_mode="bogus")
+
+
+def _no_comm_actor(env: FormationCommEnv, seed: int = 0) -> Actor:
+    """无通信方法（IPPO/MAPPO）：comm 模块没有门控头，gate 是占位 ones。"""
+    torch.manual_seed(seed)
+    comm = build_comm("none", 8, {"msg_bits": 0, "msg_dim": 0, "recv_k": 0})
+    return Actor(env.obs_dim, env.cfg.n_obs, 5, 8, comm)
+
+
+def test_no_comm_policy_reports_zero_speak_rate():
+    """无通信方法必须报 speak_rate=0；报成 1.0 会和 `bits=0` 自相矛盾。
+
+    2026-11-22 修正：Actor 在 comm=none 时 gate 恒为 ones，评测侧原来按 `gate is not None`
+    统计，于是 IPPO/MAPPO 的 `speak_rate` 全是 1.0（C 交付的 MAPPO 三 seed 就是这样）。
+    """
+    cfg = EnvConfig(backend="mock", n_agents=3, max_steps=6, channel={"drop_p": 0.1})
+    with FormationCommEnv(cfg) as env:
+        actor = _no_comm_actor(env)
+    metrics = evaluate_policy(actor, cfg, episodes=2, seed=0)
+    assert metrics["bits"] == pytest.approx(0.0)
+    assert metrics["speak_rate"] == pytest.approx(0.0)
+
