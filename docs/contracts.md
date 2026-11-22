@@ -179,7 +179,7 @@ class Critic(nn.Module):
 | train/formation_err_mean | 回合内每步编队误差均值（与 `train/step_reward` 同口径） |
 | train/collisions, eval/collisions | 每回合违反安全距离次数 |
 | comm/bits | 每机每步平均发送比特数 |
-| comm/speak_rate | 门控发言率；**无通信方法（IPPO/MAPPO）恒为 0**（2026-11-22 前因 Actor 用占位 `gate=ones` 显示成 1.0，旧日志按 0 解释，不影响 `bits`/`ferr`） |
+| comm/speak_rate | 发言率 = 该步是否真的发了消息：有门控头的（BAC/IC3Net）取门控概率；无门控但恒发（TarMAC，1024 bit）记 1.0；完全不发（IPPO/MAPPO）记 0。2026-11-22 前 Actor 用占位 `gate=ones`，无门控方法一律显示 1.0（旧日志按上表解释） |
 | qmix/target_clip | 被夹逼的 TD 目标占比（`target_clip` 关闭时恒 0，可当"是否发散"的早期预警） |
 | qmix/grad_norm | 反传时的梯度总范数（裁剪前）；持续 >`grad_clip` 说明更新量偏大 |
 | comm/beta | 当前 β |

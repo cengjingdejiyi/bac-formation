@@ -26,17 +26,31 @@ python scripts/preflight.py   # 全 PASS 才开跑
 | qmix | E | ⚠️ | ⚠️ | ⚠️ | **作废**：旧配置价值发散，待按新配置重跑 |
 | bac | C | ✅ | ✅ | ✅ | **有效**，已交（Release `results-2026-11-22-c-bac-mappo`，SHA256 校验一致） |
 | mappo | C | ✅ | ✅ | ✅ | **有效**，同上 |
-| ic3net | D | — | — | — | 未交 |
-| tarmac | D | — | — | — | 未交 |
+| ic3net | D | ✅ | ✅ | ✅ | **有效**，已交（D 的 fork Release `results-2026-11-22-d-ic3net-tarmac`，SHA256 校验一致） |
+| tarmac | D | ✅ | ✅ | ✅ | **有效**，同上 |
 
-**有效进度 9/18**（ippo 3 + bac 3 + mappo 3）。`check_results` 对 C 的 6 个 run：**6/6 通过**。
+**有效进度 15/18**（ippo 3 + bac 3 + mappo 3 + ic3net 3 + tarmac 3）。`check_results` 对 `results/main` 现有 12 个 run：**12/12 通过**。
 
-C 这批的数（末次评测 @194560，3 seed 聚合）：
+C / D 两批的数（末次评测 @194560，3 seed 聚合）：
 
 | 方法 | eval/return | eval/formation_err | eval/collisions | comm/bits | comm/speak_rate |
 |---|---|---|---|---|---|
 | BAC（L4/B2.0） | −38.4 ± 2.9 | **0.342 ± 0.022** | **2.08 ± 0.51** | 1.81 ± 0.04 | 0.45 |
-| MAPPO（无通信） | −50.8 ± 26.3 | 0.365 ± 0.149 | 12.67 ± 12.54 | 0 | 1.00 ⚠️ |
+| TarMAC（L1024/B∞） | −38.4 ± 2.7 | 0.317 ± 0.047 | 3.12 ± 1.27 | **1024**（恒发） | 1.00 |
+| MAPPO（无通信） | −50.8 ± 26.3 | 0.365 ± 0.149 | 12.67 ± 12.54 | 0 | 0 |
+| IC3Net（L1024/B∞） | −45.9 ± 10.0 | 0.436 ± 0.133 | 2.83 ± 0.95 | 511.4 ± 60.9 | 0.48 |
+
+**口径提醒（汇总出图必读）**
+
+- `speak_rate` = “这一步到底发没发消息”：有门控头的（BAC/IC3Net）取门控概率；
+  无门控但恒发的（TarMAC，1024 bit）记 **1.0**；完全不发的（IPPO/MAPPO）记 **0**。
+  这条口径在 PR #33 首版修过硬：当时按 `gate_logits is None → 0` 一刀切，会把 TarMAC
+  写成 `bits=1024` 却 `speak_rate=0`，属于新的自相矛盾；已在 #34 改成按“发没发消息”判。
+- **D 交的 tarmac `robust.csv` 里 `speak_rate` 是 0.0**，那是 #33 首版口径留下的痕迹（训练日志
+  里同一 run 是 1.0）。数据本身没问题，出图/写表时 TarMAC 的 speak 统一按 1.0 处理，
+  不必重跑；要刷新这一列重跑一次 `evaluate --drop-p` 即可（实测 tarmac s0 = 1.0000）。
+- 成本对比只能横向看 `bits`，且 BAC 是 2.0 bit 预算内的结果，IC3Net/TarMAC 是 B=∞ 上界，
+  报告里必须写明“不同预算下的上界参照”，不能直接当同预算对手比。
 
 - BAC 三个 seed 的 ferr 极稳（0.318 / 0.346 / 0.361），且 `bits=1.81 < 2.0` 预算内；
 - MAPPO 的 `speak_rate=1.0` 是**显示口径 bug**（Actor 无门控头时 `gate=ones`，旧逻辑照 `gate` 统计），
@@ -77,8 +91,9 @@ QMIX 的 `qmix/q_tot` >30 或 `loss/td` >1000（价值发散）。
 | 事项 | 负责人 | 预计 |
 |---|---|---|
 | qmix × 3 seed 重跑 | E | 1 h |
-| bac × 3、mappo × 3 | C | 2 h |
-| ic3net × 3、tarmac × 3 | D | 1.5 h |
+| bac × 3、mappo × 3 | C | ✅ 已交并入库 |
+| ic3net × 3、tarmac × 3 | D | ✅ 已交并入库 |
+| E 的 ippo 包落进 `results/main`（现在只在群里的 zip 里） | A/E | 5 min |
 | 合并 18 run + 出图 + 汇总表 | A/E | 0.5 h |
 | 结题报告 + 答辩 PPT | 全员 | 待排 |
 

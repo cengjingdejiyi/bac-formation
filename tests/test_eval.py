@@ -129,3 +129,56 @@ def test_no_comm_policy_reports_zero_speak_rate():
     assert metrics["bits"] == pytest.approx(0.0)
     assert metrics["speak_rate"] == pytest.approx(0.0)
 
+
+def test_tarmac_policy_reports_full_speak_rate():
+    """反向用例：没有门控头但恒发（tarmac 1024 bit）时发言率必须是 1.0。
+
+    只按 "gate_logits is None → 0" 修会把 tarmac 变成 `bits=1024 但 speak_rate=0`
+    的新矛盾，所以口径要按"到底发没发消息"判。
+    """
+    cfg = EnvConfig(backend="mock", n_agents=3, max_steps=6, channel={"drop_p": 0.1})
+    with FormationCommEnv(cfg) as env:
+        torch.manual_seed(0)
+        comm = build_comm("tarmac", 8, {"msg_dim": 32, "msg_bits": 4, "recv_k": 3})
+        actor = Actor(env.obs_dim, env.cfg.n_obs, 5, 8, comm)
+    metrics = evaluate_policy(actor, cfg, episodes=2, seed=0)
+    assert metrics["bits"] == pytest.approx(1024.0, rel=0.02)
+    assert metrics["speak_rate"] == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize("algo,expect", [("tarmac", 1.0), ("ippo", 0.0)])
+def test_train_speak_rate_follows_comm_kind(tmp_path, monkeypatch, algo, expect):
+    """训练日志里的 speak_rate 必须按"到底发没发消息"落数：
+
+    tarmac（无门控、恒发 1024 bit）→ 1.0；ippo（comm=none）→ 0.0。
+    旧逻辑取占位 gate 均值，两个都会写成 1.0，是 E 的 ippo 表里那处矛盾的来源。
+    """
+    monkeypatch.setattr(train_mod, "ROOT", tmp_path / algo)
+    argv = [
+        "env=formation",
+        f"algo={algo}",
+        "env.backend=mock",
+        "env.n_agents=2",
+        "env.max_steps=8",
+        "train.n_envs=2",
+        "train.rollout_len=8",
+        "train.total_env_steps=32",
+        "train.minibatch=8",
+        "train.hidden=8",
+        "train.eval_every=16",
+        "train.eval_episodes=1",
+        f"experiment.name=pytest_speak_{algo}",
+        "seed=0",
+    ]
+    assert train_mod.main(argv) == 0
+    csv_path = next((tmp_path / algo / "results").rglob("metrics.csv"))
+    rows = list(csv.DictReader(csv_path.open(encoding="utf-8")))
+    speak = [float(r["comm/speak_rate"]) for r in rows if r["comm/speak_rate"] not in ("", "nan")]
+    assert speak, "comm/speak_rate 没有落值"
+    assert all(v == pytest.approx(expect) for v in speak), (algo, speak)
+    bits = [float(r["comm/bits"]) for r in rows if r["comm/bits"] not in ("", "nan")]
+    if algo == "tarmac":
+        assert all(v > 0 for v in bits), bits
+    else:
+        assert all(v == pytest.approx(0.0) for v in bits), bits
+
