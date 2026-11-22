@@ -22,22 +22,24 @@ python scripts/preflight.py   # 全 PASS 才开跑
 
 | 方法 | 负责人 | seed 0 | seed 1 | seed 2 | 状态 |
 |---|---|---|---|---|---|
-| ippo | E | ✅ | ✅ | ✅ | **有效**，已交（issue #27） |
-| qmix | E | ⚠️ | ⚠️ | ⚠️ | **作废**：旧配置价值发散，待按新配置重跑 |
+| ippo | E | ✅ | ✅ | ✅ | **有效**，已入库（E 的 Release `results-2026-11-22-e-ippo-qmix`） |
+| qmix | E | ✅ | ✅ | ✅ | **有效**（新配置重跑）：ferr 1.276±0.625，全表最弱 |
 | bac | C | ✅ | ✅ | ✅ | **有效**，已交（Release `results-2026-11-22-c-bac-mappo`，SHA256 校验一致） |
 | mappo | C | ✅ | ✅ | ✅ | **有效**，同上 |
 | ic3net | D | ✅ | ✅ | ✅ | **有效**，已交（D 的 fork Release `results-2026-11-22-d-ic3net-tarmac`，SHA256 校验一致） |
 | tarmac | D | ✅ | ✅ | ✅ | **有效**，同上 |
 
-**有效进度 15/18**（ippo 3 + bac 3 + mappo 3 + ic3net 3 + tarmac 3）。`check_results` 对 `results/main` 现有 12 个 run：**12/12 通过**。
+**有效进度 18/18**（六方法各 3 seed 全部入库）。`check_results` 对 `results/main` 的 18 个 run：**18/18 通过**。
 
-C / D 两批的数（末次评测 @194560，3 seed 聚合）：
+六方法汇总数（末次评测 @194560，3 seed 聚合）：
 
 | 方法 | eval/return | eval/formation_err | eval/collisions | comm/bits | comm/speak_rate |
 |---|---|---|---|---|---|
 | BAC（L4/B2.0） | −38.4 ± 2.9 | **0.342 ± 0.022** | **2.08 ± 0.51** | 1.81 ± 0.04 | 0.45 |
 | TarMAC（L1024/B∞） | −38.4 ± 2.7 | 0.317 ± 0.047 | 3.12 ± 1.27 | **1024**（恒发） | 1.00 |
 | MAPPO（无通信） | −50.8 ± 26.3 | 0.365 ± 0.149 | 12.67 ± 12.54 | 0 | 0 |
+| IPPO（无通信） | −43.0 ± 6.7 | 0.385 ± 0.073 | 3.96 ± 1.44 | 0 | 0 |
+| QMIX（无通信，新配置） | −115.6 ± 45.8 | 1.276 ± 0.625 | 20.38 ± 16.22 | 0 | 0 |
 | IC3Net（L1024/B∞） | −45.9 ± 10.0 | 0.436 ± 0.133 | 2.83 ± 0.95 | 511.4 ± 60.9 | 0.48 |
 
 **口径提醒（汇总出图必读）**
@@ -59,8 +61,9 @@ C / D 两批的数（末次评测 @194560，3 seed 聚合）：
 - BAC 的 `robust.csv` 在 drop_p 0→0.5 上基本平的（ferr 0.42–0.45），说明丢包没打崩策略，
   但**不能据此宣称"鲁棒"**——训练时本来就带丢包，报告里按"无显著退化"写。
 
-QMIX 三个 run 需要重跑约 1 小时：<br>
-`python scripts/run_experiments.py --groups main --algos qmix --seeds 0 1 2 --execute --keep-going`
+QMIX 已按新配置重跑并入库（E 的 Release `results-2026-11-22-e-ippo-qmix`，SHA256 `be845c13…` 校验一致），
+训练不再发散，但末次 ferr 1.276±0.625、collisions 20.38，仍是六方法中最弱的一个；写报告时按实测值写，
+不要把"修复发散"等同于"性能恢复"。
 
 ## 2. 我方本地已有的验证 run（不进 main 汇总）
 
@@ -90,15 +93,15 @@ QMIX 的 `qmix/q_tot` >30 或 `loss/td` >1000（价值发散）。
 
 | 事项 | 负责人 | 预计 |
 |---|---|---|
-| qmix × 3 seed 重跑 | E | 1 h |
+| qmix × 3 seed 重跑 | E | ✅ 已交并入库 |
 | bac × 3、mappo × 3 | C | ✅ 已交并入库 |
 | ic3net × 3、tarmac × 3 | D | ✅ 已交并入库 |
-| E 的 ippo 包落进 `results/main`（现在只在群里的 zip 里） | A/E | 5 min |
-| 合并 18 run + 出图 + 汇总表 | A/E | 0.5 h |
-| 结题报告 + 答辩 PPT | 全员 | 待排 |
+| E 的 ippo/qmix 包落进 `results/main` | A/E | ✅ 完成（18/18 通过） |
+| 合并 18 run + 出图 + 汇总表 | A/E | ✅ 完成（18/18，报告与 PPT 已按此更新） |
+| 结题报告 + 答辩 PPT | 全员 | ✅ 已出 PDF（20 页）与 9 页 PPT，待填组号/姓名 |
 
 `scripts/make_figures.py` 已按 comm 类型重算 `speak_rate`（不再直接采信历史 `robust.csv` 那一列，
-见 `GATE_COMMS`），12 run 试跑出的图在 `results/figures/`，等 ippo/qmix 到齐再替换成 18-run 版。
+见 `GATE_COMMS`），18 run 的图在 `results/figures/` 与 `results/_logs/deck_figs/`（报告/PPT 用的是后者）。
 
 ## 5. 已知待决（需要拍板，不是 bug）
 
