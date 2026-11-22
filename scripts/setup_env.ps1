@@ -1,4 +1,4 @@
-# 安装训练环境（Windows / PowerShell）
+﻿# 安装训练环境（Windows / PowerShell）
 #
 #   pwsh -File scripts/setup_env.ps1            # 约束安装（requirements.txt）
 #   pwsh -File scripts/setup_env.ps1 -Lock      # 冻结复现（requirements-lock.txt）

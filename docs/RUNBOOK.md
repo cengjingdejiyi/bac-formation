@@ -44,6 +44,10 @@ python -c "import torch, mpe2; print(torch.__version__, mpe2.__version__)"
 
 > 输出里 `backend=mpe2` 才算数。看到 `backend=mock` 说明 mpe2 没装上，**这一批数据作废**。
 
+> Windows 上 `setup_env.ps1` 已存为 **UTF-8 with BOM**，Windows PowerShell 5.1 和 `pwsh` 7 都能直接跑。
+> 若你把它复制/另存成无 BOM 的 UTF-8，PS 5.1 会按 ANSI 解码中文注释并报 `Unexpected token`，此时改用 `pwsh -File ...` 即可。
+> 仓库已加 `.gitattributes`：`*.sh` 强制 LF、`*.ps1` 强制 CRLF，避免 Git Bash 下出现 `\r` 解析错误。
+
 ## 1. 正式实验：6 方法 × 3 seed
 
 先排班、核对运行名，再执行：
