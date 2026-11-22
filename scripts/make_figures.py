@@ -80,13 +80,24 @@ def _push(store: dict, label: str, col: str, x: float, v: float) -> None:
     store.setdefault(label, {}).setdefault(col, {}).setdefault(x, []).append(v)
 
 
+GATE_COMMS = {"bac", "ic3net"}  # 有门控头的通信模块，其余（none/tarmac）没有
+
+# 无门控头的 run，这两列不能采信文件原值（历史日志口径错），按对应 bits 列重算
+_SPEAK_COLS = {"comm/speak_rate": "comm/bits", "eval/speak_rate": "eval/bits"}
+
+
 def load_metrics(root: Path) -> dict:
-    """读所有 metrics.csv → `{series: {label: {col: {x: [v...]}}}, seeds: {label: {int}}}`。"""
+    """读所有 metrics.csv → `{series: {label: {col: {x: [v...]}}}, seeds: {label: {int}}}`。
+
+    `speak_rate` 需要按 comm 类型归一化：C 的 mappo（跑在旧代码上）训练日志里是 1.0，
+    D 的 tarmac `eval/speak_rate` 是 0.0，直接画图会出现"bits=1024 但发言率 0"。
+    """
     series: dict = {}
     seeds: dict = {}
     for path in sorted(Path(root).rglob("metrics.csv")):
         info = parse_run_path(path.parent, Path(root))
         label = info["label"]
+        comm = _comm_of(path.parent)
         if info["seed"] is not None:
             seeds.setdefault(label, set()).add(info["seed"])
         with open(path, encoding="utf-8") as f:
@@ -94,17 +105,21 @@ def load_metrics(root: Path) -> dict:
                 step = _num(row.get("env_steps"))
                 if step is None:
                     continue
+                vals = {}
                 for col, raw in row.items():
                     if not col or col == "env_steps" or "/" not in col:
                         continue
                     v = _num(raw)
-                    if v is None:
-                        continue
+                    if v is not None:
+                        vals[col] = v
+                if comm and comm not in GATE_COMMS:
+                    for speak_col, bits_col in _SPEAK_COLS.items():
+                        if speak_col in vals:
+                            bits = vals.get(bits_col) or 0.0
+                            vals[speak_col] = 1.0 if bits > 0 else 0.0
+                for col, v in vals.items():
                     _push(series, label, col, step, v)
     return {"series": series, "seeds": seeds}
-
-
-GATE_COMMS = {"bac", "ic3net"}  # 有门控头的通信模块，其余（none/tarmac）没有
 
 
 def _comm_of(run_dir: Path) -> str:

@@ -158,6 +158,26 @@ def test_load_robust_normalises_stale_speak_rate(tmp_path):
         assert data["series"][label]["speak_rate"][0.0] == [expect], label
 
 
+def test_load_metrics_normalises_stale_eval_speak_rate(tmp_path):
+    """训练日志里的 eval/speak_rate 同样不能直接采信（C 的 mappo 是旧代码 1.0）。"""
+    header = ["env_steps", "eval/bits", "eval/speak_rate", "comm/bits", "comm/speak_rate"]
+    cases = [
+        ("formation_6n_mappo_L0_K3_B0.0_s0", "none", 0.0, 1.0, 0.0),
+        ("formation_6n_tarmac_L1024_K3_Binf_s0", "tarmac", 1024.0, 0.0, 1.0),
+        ("formation_6n_bac_L4_K3_B2.0_s0", "bac", 1.8, 0.45, 0.45),
+    ]
+    for run, comm, bits, stale, expect in cases:
+        d = tmp_path / "main" / run
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "config.yaml").write_text(f"algo:\n  comm: {comm}\n", encoding="utf-8")
+        _write_csv(d / "metrics.csv", header, [[1000, bits, stale, bits, stale]])
+    data = mf.load_metrics(tmp_path)
+    for run, _comm, _bits, _stale, expect in cases:
+        label = f"main/{mf.parse_run_name(run)['label']}"
+        for col in ("eval/speak_rate", "comm/speak_rate"):
+            assert data["series"][label][col][1000.0] == [expect], (label, col)
+
+
 def test_main_returns_one_without_data(tmp_path):
     assert mf.main(["--results", str(tmp_path)]) == 1
 
