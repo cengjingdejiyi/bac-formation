@@ -88,14 +88,28 @@ python scripts/run_experiments.py --groups main \
 必须包含：`config.yaml`、`metrics.csv`、`ckpt/last.ckpt`、`robust.csv`；
 `tb/` 可选。缺 `metrics.csv` 的目录直接退回。
 
-汇总前自检（E 负责，Windows/macOS/Linux 通用）：
+### 2.1 合并多人的包（汇总机执行）
+
+```bash
+python scripts/merge_results.py --dest results/main \
+  --src D:/交接/E_ippo_qmix.zip --src D:/交接/C_bac_mappo
+```
+
+- 源可以是 zip 或目录，会递归找**含 `metrics.csv`** 的目录当作 run；run 名必须带 `_s<seed>`，否则拒收（防止把 `_logs`、`figures` 搬进来）；
+- 同名 run 默认**跳过并报告**，`--overwrite` 才覆盖；合并清单写到 `results/main/_merge_manifest.tsv`（谁交的、多大、什么时候并的）；
+- `--dry-run` 先看清单不动文件；
+- 合并完必须接着跑第 2.2 节自检。
+
+### 2.2 汇总前自检（E 负责，Windows/macOS/Linux 通用）
 
 ```bash
 python scripts/check_results.py --results results/main
 ```
 
 它逐个 run 检查：`config.yaml`/`metrics.csv`/`ckpt/last.ckpt` 是否齐全、必需列是否缺、
-行数与 `env_steps` 是否匹配、`loss/value` 是否仍在 O(1) 量级（`value_norm` 没生效会直接报出来）。
+行数与 `env_steps` 是否匹配、`loss/value` 是否仍在 O(1) 量级（`value_norm` 没生效会直接报出来）；
+QMIX 还会多查两条：配置里有没有 `td_huber`/`target_clip`（缺=2026-11-22 之前的发散配置），
+以及 `qmix/q_tot` 是否 >30、`loss/td` 是否 >1000（价值发散）。
 有问题退出码非 0，可以直接串进批处理。
 
 出图（**务必指定正式目录**，默认 `results/` 会把历史验证目录混进图例）：
