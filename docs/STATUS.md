@@ -24,12 +24,28 @@ python scripts/preflight.py   # 全 PASS 才开跑
 |---|---|---|---|---|---|
 | ippo | E | ✅ | ✅ | ✅ | **有效**，已交（issue #27） |
 | qmix | E | ⚠️ | ⚠️ | ⚠️ | **作废**：旧配置价值发散，待按新配置重跑 |
-| bac | C | — | — | — | 未交 |
-| mappo | C | — | — | — | 未交 |
+| bac | C | ✅ | ✅ | ✅ | **有效**，已交（Release `results-2026-11-22-c-bac-mappo`，SHA256 校验一致） |
+| mappo | C | ✅ | ✅ | ✅ | **有效**，同上 |
 | ic3net | D | — | — | — | 未交 |
 | tarmac | D | — | — | — | 未交 |
 
-**有效进度 3/18**（ippo 三个 seed）。QMIX 三个 run 需要重跑约 1 小时：<br>
+**有效进度 9/18**（ippo 3 + bac 3 + mappo 3）。`check_results` 对 C 的 6 个 run：**6/6 通过**。
+
+C 这批的数（末次评测 @194560，3 seed 聚合）：
+
+| 方法 | eval/return | eval/formation_err | eval/collisions | comm/bits | comm/speak_rate |
+|---|---|---|---|---|---|
+| BAC（L4/B2.0） | −38.4 ± 2.9 | **0.342 ± 0.022** | **2.08 ± 0.51** | 1.81 ± 0.04 | 0.45 |
+| MAPPO（无通信） | −50.8 ± 26.3 | 0.365 ± 0.149 | 12.67 ± 12.54 | 0 | 1.00 ⚠️ |
+
+- BAC 三个 seed 的 ferr 极稳（0.318 / 0.346 / 0.361），且 `bits=1.81 < 2.0` 预算内；
+- MAPPO 的 `speak_rate=1.0` 是**显示口径 bug**（Actor 无门控头时 `gate=ones`，旧逻辑照 `gate` 统计），
+  已修（`evaluate.py` 改为看 `gate_logits`、`train.py` 按 `algo.comm=none` 归零），数据本身有效，表里按 0 填；
+- MAPPO 的 s2 是离群 seed（ferr 0.537、collisions 27、return −81），报告里要写方差而不是只取均值；
+- BAC 的 `robust.csv` 在 drop_p 0→0.5 上基本平的（ferr 0.42–0.45），说明丢包没打崩策略，
+  但**不能据此宣称"鲁棒"**——训练时本来就带丢包，报告里按"无显著退化"写。
+
+QMIX 三个 run 需要重跑约 1 小时：<br>
 `python scripts/run_experiments.py --groups main --algos qmix --seeds 0 1 2 --execute --keep-going`
 
 ## 2. 我方本地已有的验证 run（不进 main 汇总）
