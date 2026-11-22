@@ -3,6 +3,21 @@
 > 目标：`main` 组 6 方法 × 3 seed = **18 个 run**，每个 200k env_steps，单 run 15–20 分钟。
 > 结果不入库，交接靠 zip → `scripts/merge_results.py` → `scripts/check_results.py`。
 
+## 0. 开跑前必做（C / D / E 都一样）
+
+```bash
+git pull                      # 必须到 d51987e5 之后
+python scripts/preflight.py   # 全 PASS 才开跑
+```
+
+`preflight` 会核对代码版本（`value_norm`、QMIX 稳定化参数）、主配置（`value_norm=true`、
+`reward_norm=false`、正式环境参数、200k 步）、QMIX 配置（`td_huber`/`target_clip`/`lr`）、
+真实后端（`backend=mpe2`）和 `results/` 可写。**任何 FAIL 都不要开跑**，按提示处置后重跑；
+否则跑出来的数据在汇总阶段会被 `check_results` 直接判废，白烧 1.5–2 小时。
+
+废数据的典型症状（出现即停）：`backend=mock`、`loss/value` 均值 >50、`loss/td` 破千、
+缺 `train/return_all`、IC3Net/TarMAC 运行名写成 `L0/B0.0`。完整表见 `docs/RUNBOOK.md` §0.1。
+
 ## 1. 逐 run 状态
 
 | 方法 | 负责人 | seed 0 | seed 1 | seed 2 | 状态 |
