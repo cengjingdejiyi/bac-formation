@@ -48,6 +48,32 @@ python -c "import torch, mpe2; print(torch.__version__, mpe2.__version__)"
 > 若你把它复制/另存成无 BOM 的 UTF-8，PS 5.1 会按 ANSI 解码中文注释并报 `Unexpected token`，此时改用 `pwsh -File ...` 即可。
 > 仓库已加 `.gitattributes`：`*.sh` 强制 LF、`*.ps1` 强制 CRLF，避免 Git Bash 下出现 `\r` 解析错误。
 
+## 0. 开工前 3 分钟（必做，不做就可能整批作废）
+
+```bash
+git pull                                  # 必须在 d51987e5 之后
+python scripts/preflight.py               # 全 PASS 才开跑；任何 FAIL 按提示处置
+python -m pytest -q                       # 期望 281 passed（少很多说明 clone 太旧）
+```
+
+`preflight.py` 会逐项核对：代码版本（`value_norm`、QMIX 稳定化参数是否已入库）、
+主配置（`train.value_norm=true` / `train.reward_norm=false` / 正式环境参数 / 200k 步）、
+QMIX 配置（`td_huber`、`target_clip`、`lr≤2.5e-4`、`updates_per_train≤2`）、
+依赖与真实后端（`backend=mpe2`，不是 `mock`）、`results/` 可写。
+**它是"防废数据"的最后一道闸，失败时退出码非 0，不要绕过。**
+
+### 0.1 什么情况算"废数据"（出现即停，别往下跑）
+
+| 症状 | 病因 | 处置 |
+|---|---|---|
+| 日志 `backend=mock` | mpe2 没装上 | 重装环境（`setup_env`）；这批数据作废 |
+| `loss/value` 均值 >50 | `value_norm` 没生效（旧代码/旧配置） | `git pull` + 确认 `train.value_norm: true`；重跑 |
+| `loss/td` 破千 / `qmix/q_tot` 上千 | 旧 QMIX 配置（MSE + lr 5e-4 + 每次 4 步） | `git pull` + 确认 `td_huber/target_clip`；重跑 |
+| 缺列 `train/return_all`、`train/formation_err_mean` | clone 停在 2026-11-21 之前 | `git pull`；重跑 |
+| IC3Net/TarMAC 的 run 名是 `L0` / `B0.0` | 命名口径漂移（应按 `L1024` / `Binf`） | 检查 `algo=ic3net\|tarmac` 是否传对；重跑 |
+| 行数与 `env_steps` 对不上（应约 `env_steps/512`） | 中途 kill 或换 `experiment.name` 覆盖 | 重跑，别复用目录 |
+| 训练日志没有 `train/value_scale` 列 | 旧训练入口 | `git pull`；重跑 |
+
 ## 1. 正式实验：6 方法 × 3 seed
 
 先排班、核对运行名，再执行：
