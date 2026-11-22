@@ -7,8 +7,8 @@
   194560 那一档），不是训练滑窗值；
 - 跨 seed 聚合：均值 ± **样本标准差**（`ddof=1`）；seed 数不足 3 时表尾标注 `n=1/2`，提醒别当结论；
 - `L`/`B`/`K` 从运行名解析（`formation_6n_bac_L4_K3_B2.0_s0`），`L0` 表示无通信；
-- `speak_rate` 直接读 `metrics.csv`：无通信方法（`algo.comm=none`）在 #33/#34 之后落盘即为 0，
-  历史数据若为占位 1.0 会被标 `!` 提醒。
+- `speak_rate` 与 `make_figures.py` 的 `GATE_COMMS` 同口径：`L0`（无通信）一律按 0 计，
+  不采信 `metrics.csv` 里历史遗留的占位 1.0。
 
 用法：
     python scripts/make_summary_table.py                       # 打印 markdown
@@ -122,9 +122,9 @@ def render(root: Path) -> tuple[str, list[dict]]:
             n = len(seeds)
             flag = "" if n >= 3 else f" ⚠n={n}"
             sr = agg["comm/speak_rate"]
+            if meta["l"] == "0":  # 无通信分支：与 make_figures 的 GATE_COMMS 同口径，恒按 0 计
+                sr = (0.0, 0.0, sr[2]) if sr[0] is not None else sr
             sr_txt = _fmt(*sr[:2], sr[2], 2) if sr[0] is not None else "—"
-            if meta["algo"] in ("ippo", "mappo", "qmix") and sr[0] and abs(sr[0] - 1.0) < 1e-9:
-                sr_txt += " !旧占位口径"
             row = [
                 DISPLAY.get(meta["algo"], meta["algo"]),
                 ("L" + str(meta["l"]).rstrip("0").rstrip(".")) if meta["l"] != "0" else "L0",
@@ -146,7 +146,7 @@ def render(root: Path) -> tuple[str, list[dict]]:
                 "eval/collisions": agg["eval/collisions"][0],
                 "eval/collisions_std": agg["eval/collisions"][1],
                 "comm/bits": agg["comm/bits"][0],
-                "comm/speak_rate": agg["comm/speak_rate"][0],
+                "comm/speak_rate": sr[0],
             })
         lines.append("")
     n_runs = sum(1 for g in data.values() for lb in g.values() for k in lb if isinstance(k, int))

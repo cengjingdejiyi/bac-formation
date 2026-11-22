@@ -67,7 +67,8 @@ def test_no_comm_speak_rate_zero_and_name_parsing(tmp_path):
     assert "⚠n=" not in md
 
 
-def test_legacy_placeholder_flag_and_single_seed_warning(tmp_path):
+def test_no_comm_placeholder_normalized_to_zero(tmp_path):
+    """无通信 run 的 metrics.csv 里 speak_rate 若为历史占位 1.0，汇总表按 0 计。"""
     mod = _load()
     root = tmp_path / "results"
     _write_run(root, "main", "formation_6n_mappo_L0_K3_B0.0_s0", [
@@ -75,8 +76,10 @@ def test_legacy_placeholder_flag_and_single_seed_warning(tmp_path):
          "eval/collisions": 4.0, "comm/bits": 0.0, "comm/speak_rate": 1.0},
     ])
     md, recs = mod.render(root)
-    assert "!旧占位口径" in md      # 无通信却记 1.0 → 历史口径，要提醒
-    assert "⚠n=1" in md            # 单 seed 不能当结论
+    assert recs[0]["comm/speak_rate"] == pytest.approx(0.0)
+    assert "!旧占位口径" not in md   # 不再输出误导性的 1.00
+    assert "| 0.00 |" in md          # speak_rate 列已归零
+    assert "⚠n=1" in md              # 单 seed 不能当结论
 
 
 def test_ignores_dirs_without_metrics_or_bad_names(tmp_path):
