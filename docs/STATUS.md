@@ -97,6 +97,9 @@ QMIX 的 `qmix/q_tot` >30 或 `loss/td` >1000（价值发散）。
 | 合并 18 run + 出图 + 汇总表 | A/E | 0.5 h |
 | 结题报告 + 答辩 PPT | 全员 | 待排 |
 
+`scripts/make_figures.py` 已按 comm 类型重算 `speak_rate`（不再直接采信历史 `robust.csv` 那一列，
+见 `GATE_COMMS`），12 run 试跑出的图在 `results/figures/`，等 ippo/qmix 到齐再替换成 18-run 版。
+
 ## 5. 已知待决（需要拍板，不是 bug）
 
 1. 是否加跑 `collision_coef ∈ {0.2, 0.5}` 对照（B 标定层）；

@@ -131,6 +131,33 @@ def test_load_robust_groups_seeds(tmp_path):
     assert sorted(pts) == [0.6, 0.7]
 
 
+def test_load_robust_normalises_stale_speak_rate(tmp_path):
+    """历史 robust.csv 的 speak_rate 列不可信，必须按 comm 类型重算。
+
+    - mappo（comm=none，bits=0）文件里写 1.0 → 出图必须画 0.0；
+    - tarmac（无门控但恒发 1024 bit）文件里写 0.0 → 出图必须画 1.0；
+    - bac（有门控）保留原值 0.45。
+    """
+    cases = [
+        ("formation_6n_mappo_L0_K3_B0.0_s0", "none", 0.0, 1.0, 0.0),
+        ("formation_6n_tarmac_L1024_K3_Binf_s0", "tarmac", 1024.0, 0.0, 1.0),
+        ("formation_6n_bac_L4_K3_B2.0_s0", "bac", 1.8, 0.45, 0.45),
+    ]
+    for run, comm, bits, stale, expect in cases:
+        d = tmp_path / "main" / run
+        (d / "config.yaml").parent.mkdir(parents=True, exist_ok=True)
+        (d / "config.yaml").write_text(f"algo:\n  comm: {comm}\n", encoding="utf-8")
+        _write_csv(
+            d / "robust.csv",
+            ["drop_p", "success_rate", "formation_err", "speak_rate", "bits"],
+            [[0.0, 0.0, 0.5, stale, bits]],
+        )
+    data = mf.load_robust(tmp_path)
+    for run, _comm, _bits, _stale, expect in cases:
+        label = f"main/{mf.parse_run_name(run)['label']}"
+        assert data["series"][label]["speak_rate"][0.0] == [expect], label
+
+
 def test_main_returns_one_without_data(tmp_path):
     assert mf.main(["--results", str(tmp_path)]) == 1
 

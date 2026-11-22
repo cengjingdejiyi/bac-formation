@@ -104,13 +104,36 @@ def load_metrics(root: Path) -> dict:
     return {"series": series, "seeds": seeds}
 
 
+GATE_COMMS = {"bac", "ic3net"}  # 有门控头的通信模块，其余（none/tarmac）没有
+
+
+def _comm_of(run_dir: Path) -> str:
+    """从 run 的 config.yaml 取 algo.comm；读不到就返回空串（不猜测）。"""
+    cfg_path = run_dir / "config.yaml"
+    if not cfg_path.exists():
+        return ""
+    try:
+        import yaml
+
+        cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return ""
+    return str((cfg.get("algo") or {}).get("comm", ""))
+
+
 def load_robust(root: Path) -> dict:
-    """读所有 robust.csv → `{series: {label: {col: {drop_p: [v...]}}}, seeds: ...}}`。"""
+    """读所有 robust.csv → `{series: {label: {col: {drop_p: [v...]}}}, seeds: ...}}`。
+
+    注意：`speak_rate` 不能直接采信文件里的那一列。历史 robust.csv 是在口径修正前
+    跑出来的——IPPO/MAPPO 写成 1.0（Actor 占位 gate），TarMAC 写成 0.0（按无门控一刀切）。
+    这里统一按"到底发没发消息"重算：有门控头的信原值；没门控头时 bits>0 记 1.0、否则 0.0。
+    """
     series: dict = {}
     seeds: dict = {}
     for path in sorted(Path(root).rglob("robust.csv")):
         info = parse_run_path(path.parent, Path(root))
         label = info["label"]
+        comm = _comm_of(path.parent)
         if info["seed"] is not None:
             seeds.setdefault(label, set()).add(info["seed"])
         with open(path, encoding="utf-8") as f:
@@ -118,10 +141,11 @@ def load_robust(root: Path) -> dict:
                 x = _num(row.get("drop_p"))
                 if x is None:
                     continue
-                for col, raw in row.items():
-                    if col == "drop_p":
-                        continue
-                    v = _num(raw)
+                vals = {c: _num(v) for c, v in row.items() if c != "drop_p"}
+                if comm and comm not in GATE_COMMS:
+                    bits = vals.get("bits") or 0.0
+                    vals["speak_rate"] = 1.0 if bits > 0 else 0.0
+                for col, v in vals.items():
                     if v is None:
                         continue
                     _push(series, label, col, x, v)
@@ -374,9 +398,9 @@ def main(argv: list[str] | None = None) -> int:
 
     out.mkdir(parents=True, exist_ok=True)
     titles = {
-        "main": "BAC-MAPPO: train vs eval (mean ± std over seeds)",
-        "comm": "BAC-MAPPO: communication budget (mean ± std over seeds)",
-        "robust": "BAC-MAPPO: robustness vs packet drop (mean ± std over seeds)",
+        "main": "6 methods × 3 seeds: train vs eval (mean ± std over seeds)",
+        "comm": "6 methods × 3 seeds: communication budget (mean ± std over seeds)",
+        "robust": "6 methods × 3 seeds: robustness vs packet drop (mean ± std over seeds)",
     }
     made = [
         fig_train_eval(metrics, plt, out, args.dpi, titles),
