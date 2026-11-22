@@ -200,6 +200,14 @@ def _train(cfg: dict, vec: VecFormationEnv, robust: bool = False) -> int:
     eps_anneal = int(algo.get("eps_anneal_steps", 100000))
     grad_clip = float(algo.get("grad_clip", 10.0))
     double_q = bool(algo.get("double_q", True))
+    # 稳定化三件套（2026-11-21 加入，见 algos/qmix.py 的说明与 docs/baselines.md §5.1）：
+    # Huber 损失把离群 TD 误差压成线性、target 夹逼阻断自举发散、梯度范数进日志。
+    td_huber = bool(algo.get("td_huber", True))
+    huber_beta = float(algo.get("huber_beta", 1.0))
+    _clip = algo.get("target_clip", 50.0)
+    target_clip = float(_clip) if _clip not in (None, "none", "None") else None
+    if target_clip is not None and target_clip <= 0:
+        target_clip = None
     # DQN 系常规做法：把每步奖励缩放到 O(1)，价值量级才不会到 -100（100 步回合、
     # 每步 -1 时）。只缩放学习用的回报，环境返回的回合回报照旧记账。
     reward_scale = float(algo.get("reward_scale", 1.0))
@@ -249,6 +257,7 @@ def _train(cfg: dict, vec: VecFormationEnv, robust: bool = False) -> int:
     ret_sum, ret_n = 0.0, 0
     updates = 0
     last_stats = None
+    last_grad_norm = float("nan")
     window_rewards: list[float] = []
     last_log = 0
 
@@ -310,11 +319,24 @@ def _train(cfg: dict, vec: VecFormationEnv, robust: bool = False) -> int:
                 for _ in range(updates_per_train):
                     sample = replay.sample(batch_size, rng)
                     loss, last_stats = qmix_td_loss(
-                        agent, target, sample, gamma, double_q=double_q
+                        agent,
+                        target,
+                        sample,
+                        gamma,
+                        double_q=double_q,
+                        huber=td_huber,
+                        huber_beta=huber_beta,
+                        target_clip=target_clip,
                     )
+                    if not torch.isfinite(loss):
+                        # 发散样本直接跳过，不清梯度也不更新参数。
+                        opt.zero_grad(set_to_none=True)
+                        continue
                     opt.zero_grad()
                     loss.backward()
-                    torch.nn.utils.clip_grad_norm_(agent.parameters(), grad_clip)
+                    last_grad_norm = float(
+                        torch.nn.utils.clip_grad_norm_(agent.parameters(), grad_clip)
+                    )
                     opt.step()
                     updates += 1
                     if updates % target_update == 0:
@@ -373,6 +395,8 @@ def _train(cfg: dict, vec: VecFormationEnv, robust: bool = False) -> int:
                     "qmix/td_abs": last_stats.td_abs if last_stats else float("nan"),
                     "qmix/q_tot": last_stats.q_tot if last_stats else float("nan"),
                     "qmix/target": last_stats.target if last_stats else float("nan"),
+                    "qmix/target_clip": last_stats.clip_frac if last_stats else float("nan"),
+                    "qmix/grad_norm": last_grad_norm,
                     **{f"eval/{k}": v for k, v in eval_metrics.items()},
                 }
                 logger.log(row, steps)

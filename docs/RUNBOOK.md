@@ -62,6 +62,10 @@ python scripts/run_experiments.py --groups main \
 - 单 run 200k 步实测 **约 15–20 分钟**（4 分钟/5 万步，8 并行环境，CPU）；18 个 run 串行约 **5–6 小时**。
 - 想跑更长（500k–1M，冲成功率）加 `--total-env-steps 500000`。
 - 想分机器跑，用 `--only` 或 `--algos` 拆开，但**不要改运行名**，否则汇总时对不上。
+- **QMIX 必须用 2026-11-22 之后的配置**（`td_huber: true`、`target_clip: 50.0`、`lr 2.5e-4`、
+  `updates_per_train: 2`、`target_update: 200`）。旧的 3 个 seed（`results/main/...qmix...s0/s1/s2`）
+  在 43k 步起价值发散（`loss/td` 到 1e6 级），**曲线作废**，需按新配置重跑后再汇总。
+  自检只需看 `qmix/q_tot` 是否保持在 ±30 内、`loss/td` 是否稳定在个位数。
 
 ### 分工建议（3 台机器，每人 2 个方法 × 3 seed）
 
