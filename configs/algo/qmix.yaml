@@ -14,14 +14,14 @@ algo:
   beta_lr: 0.0
 
   # —— QMIX 专用超参（调参记录见 docs/baselines.md §4）——
-  lr: 5.0e-4               # 值分解对步长比 PPO 敏感，单独给（训练日志里记这条）
+  lr: 2.5e-4               # 值分解对步长比 PPO 敏感；5e-4 实测发散（见 §5.1）
   batch_size: 32           # 每次梯度更新的转移数
   n_step: 5                # n 步回报：1 步 TD 在 200k 步预算内传不到 100 步的回报量级
   replay_size: 200000      # 与正式实验总步数同量级，单进程 CPU 内存约 0.3 GB
   train_start: 2000        # 预热：replay 不足时只采样不更新
   train_every: 4           # 每 4 个 env_steps 检查一次更新窗口（≤ n_envs 时等价于每轮都更新）
-  updates_per_train: 4     # 每次触发做 4 个梯度步 → 约 1 次更新 / 2 个 env_step
-  target_update: 500       # target 网络硬更新间隔（按梯度步计）
+  updates_per_train: 2     # 每次触发做 2 个梯度步 → 约 1 次更新 / 4 个 env_step
+  target_update: 200       # target 网络硬更新间隔（按梯度步计）
   mixer_embed: 32          # 混合网络隐层宽度
   hypernet_embed: 64       # 超网络隐层宽度
   eps_start: 1.0           # ε-贪心从全局探索退到 5%
@@ -31,3 +31,6 @@ algo:
   grad_clip: 10.0
   reward_scale: 0.1        # 学习用奖励缩放（DQN 系常规做法），环境回报照旧记账
   use_agent_id: true       # 个体 Q 输入追加 agent_id one-hot（PyMARL QMIX 的做法）
+  td_huber: true           # smooth-L1 做 TD 损失，离群样本只贡献线性梯度
+  huber_beta: 1.0          # |TD 误差| < beta 时退化为 MSE（二次段）
+  target_clip: 50.0        # TD 目标夹到 ±50：自举不动点加了界，拦掉数值逃逸（0/空=不夹）

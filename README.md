@@ -82,7 +82,7 @@ W1 环境+框架+接口冻结 → W2–3 方法跑通 → W4–5 正式实验 �
 
 | 检查 | 结果 |
 |---|---|
-| 环境、通信信息流、缓存与 GAE 测试 | **265 项测试**：原 124 项覆盖旋转编队、局部脚本多种子完成、有向边、静默/丢包、STE、发送预算及跨回合边界；后续补入 6 算法命名口径、QMIX 学习、评测失败路径、ckpt 加载失败（返回 4）、概率越界与 `value_norm` |
+| 环境、通信信息流、缓存与 GAE 测试 | **272 项测试**：原 124 项覆盖旋转编队、局部脚本多种子完成、有向边、静默/丢包、STE、发送预算及跨回合边界；后续补入 6 算法命名口径、QMIX 学习、评测失败路径、ckpt 加载失败（返回 4）、概率越界、`value_norm` 与 QMIX 数值稳定性（夹逼/Huber/梯度有限） |
 | `python scripts/verify_transitions.py` | 首步与末步缓存奖励均与实际 step 返回值一致 |
 | rollout 分段 | 环境与隐状态跨段延续；仅 done 环境重置 |
 | 续训一致性 | β、优化器、奖励缩放、回合日志窗口（`recent`/`count`/`ret_sum`）随 ckpt 存取 |
@@ -100,6 +100,18 @@ W1 环境+框架+接口冻结 → W2–3 方法跑通 → W4–5 正式实验 �
 - 指标补齐：`train/return_all`（全程累计均值）、`train/formation_err_mean`（回合内每步均值），
   与 `train/formation_err`（回合末值）分开，避免同一张表里两个口径混用。
 - 环境与复现：`requirements-lock.txt`、`scripts/setup_env.ps1` / `setup_env.sh`、`docs/RUNBOOK.md`。
+
+### 2026-11-22 QMIX 数值稳定性修复
+
+- 症状：旧 QMIX 配置（lr 5e-4 / 每次 4 个梯度步 / MSE / 不夹逼）在 43k 步起 `qmix/q_tot` 转正，
+  74k 步 `loss/td` 破千，123k 后到百万级，200k 末 **2.2e6**；同期 `eval/formation_err` 从 1.1 涨到 8.6。
+  这批 QMIX 曲线（含 seed 0/1/2）**作废，需按新配置重跑**。
+- 修复：`algo.td_huber: true`（smooth-L1，离群样本线性梯度）、`algo.target_clip: 50.0`（TD 目标夹逼，
+  自举不动点加界）、`lr 5e-4 → 2.5e-4`、`updates_per_train 4 → 2`、`target_update 500 → 200`，
+  并新增 `qmix/grad_norm`、`qmix/target_clip` 两列（发散早期预警）。
+- 回归：`tests/test_qmix_stability.py`（5 条：夹逼边界、无夹逼行为不变、Huber 对离群样本有界、
+  夹逼比例记账、坏样本梯度有限）。
+- 口径：这是"价值目标量级失控"的 QMIX 版本，与 PPO 侧 `value_norm` 是同一类问题，两边的修复都必须进报告。
 
 旧版“训练跑通 / bits 接近预算”的结果受通信方向和奖励错位影响，不能证明通信有效或作为正式实验数据。修复依据、逐项核查和可复现命令见 [问题核查与修复](docs/issue-fixes.md)。短训练仅验证代码运行，不代表策略收敛。
 

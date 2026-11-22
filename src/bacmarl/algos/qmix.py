@@ -188,9 +188,18 @@ def epsilon_at(step: int, start: float, end: float, anneal_steps: int) -> float:
     return float(start + (end - start) * frac)
 
 
-def td_target(reward, done, q_tot_next, gamma: float):
-    """y = r + γ(1-d)·Q_tot(s')；done 为 float [B]，终止转移只保留 r。"""
-    return reward + gamma * (1.0 - done) * q_tot_next
+def td_target(reward, done, q_tot_next, gamma: float, clip: float | None = None):
+    """y = r + γ(1-d)·Q_tot(s')；done 为 float [B]，终止转移只保留 r。
+
+    `clip` 给定时把 y 夹到 [-clip, clip]：Q 的自举是**不动点迭代**，一次发散就会把
+    目标推到几千、再用 MSE 把梯度放大到百万级（2026-11-21 的 qmix 日志就是这个形状：
+    `qmix/q_tot` 从 −5 涨到 5360、`loss/td` 峰值 9.4e6）。夹一刀等于给迭代加了界，
+    不改变收敛点（合法 Q 量级见下），只拦掉数值逃逸。
+    """
+    y = reward + gamma * (1.0 - done) * q_tot_next
+    if clip is not None and float(clip) > 0:
+        y = y.clamp(-float(clip), float(clip))
+    return y
 
 
 @dataclass
@@ -199,11 +208,17 @@ class QMixLossStats:
     td_abs: float
     q_tot: float
     target: float
+    clip_frac: float = 0.0
 
 
 def qmix_td_loss(agent: QMixAgent, target: QMixAgent, batch: dict, gamma: float,
-                 double_q: bool = True) -> tuple[torch.Tensor, QMixLossStats]:
+                 double_q: bool = True, huber: bool = True, huber_beta: float = 1.0,
+                 target_clip: float | None = None) -> tuple[torch.Tensor, QMixLossStats]:
     """一次 TD 更新：Double-Q 目标 + 单调混合，返回标量 loss 与统计量。
+
+    `huber=True` 用 smooth-L1（β 控制二次/线性切换点）：离群 TD 误差只贡献线性梯度，
+    不会像 MSE 那样把一个坏样本放大成 1e6 级 loss。这是 QMIX 系实现里最常见的稳定化
+    手段，和 PPO 侧 `value_norm` 针对的是同一类"价值目标量级失控"。
 
     batch 的键见 `bacmarl.algos.replay.TransitionReplay.sample`，形状均为 [K, ...]。
     """
@@ -223,14 +238,22 @@ def qmix_td_loss(agent: QMixAgent, target: QMixAgent, batch: dict, gamma: float,
         else:
             q_next = q_target_next.max(-1).values
         q_tot_next = target.mixer(q_next, batch["next_state"])
-        y = td_target(batch["reward"], batch["done"], q_tot_next, gamma)
+        raw = td_target(batch["reward"], batch["done"], q_tot_next, gamma)
+        y = td_target(
+            batch["reward"], batch["done"], q_tot_next, gamma, clip=target_clip
+        )
 
-    loss = F.mse_loss(q_tot, y)
+    if huber:
+        loss = F.smooth_l1_loss(q_tot, y, beta=float(huber_beta))
+    else:
+        loss = F.mse_loss(q_tot, y)
     td = (q_tot - y).detach()
+    clip_frac = float((raw != y).float().mean()) if target_clip else 0.0
     stats = QMixLossStats(
         loss=float(loss.detach()),
         td_abs=float(td.abs().mean()),
         q_tot=float(q_tot.mean().detach()),
         target=float(y.mean()),
+        clip_frac=clip_frac,
     )
     return loss, stats

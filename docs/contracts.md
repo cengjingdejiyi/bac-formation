@@ -141,6 +141,17 @@ class Critic(nn.Module):
 | train.eval_gate_mode | threshold（p≥0.5，历史口径）\| sample（与训练分布同口径） | E |
 | seed | 随机种子 | E |
 
+#### 5.1 QMIX 稳定化参数（只存在于 `configs/algo/qmix.yaml`）
+
+| 键 | 取值/含义 | 负责人 |
+|---|---|---|
+| algo.td_huber | true：TD 损失用 smooth-L1（β=`huber_beta`），离群样本只贡献线性梯度 | D |
+| algo.huber_beta | 1.0：\|TD 误差\|<β 的二次段 | D |
+| algo.target_clip | 50.0：TD 目标夹到 ±50；`0`/`null` 关闭（旧行为） | D |
+| algo.lr / updates_per_train / target_update | 2.5e-4 / 2 / 200（2026-11-21 起）；与夹逼、Huber 是**同一组改动**，不得单独替换其中一个后混进同一张汇总表 | D |
+
+旧配置（lr 5e-4、updates 4、target 500、MSE、不夹逼）在 43k 步起 `qmix/q_tot` 转正、74k 步 `loss/td` 破千、123k 后到百万级，200k 末 `loss/td` 2.2e6 —— 该批 QMIX 曲线**不得作为基线结论**引用。
+
 - 所有方法共用 `train.*`，只允许改 `algo.*`。
 - 任何默认值改动须在群里同步并写进提交说明。
 - 本次修复统一正式参数：`backend=mpe2, obs_radius=comm_radius=0.8, collision_coef=1.0`；后者按每个不安全机对计价。`formation_calibrated` 仅是正式配置的兼容别名，`formation_legacy` 仅供旧半径对照，不参与默认正式实验。几何与可行性证据不等于惩罚系数最优或训练已收敛，报告数值以此配置表和 `docs/env-calibration.md` 为准。
@@ -169,6 +180,8 @@ class Critic(nn.Module):
 | train/collisions, eval/collisions | 每回合违反安全距离次数 |
 | comm/bits | 每机每步平均发送比特数 |
 | comm/speak_rate | 门控发言率 |
+| qmix/target_clip | 被夹逼的 TD 目标占比（`target_clip` 关闭时恒 0，可当"是否发散"的早期预警） |
+| qmix/grad_norm | 反传时的梯度总范数（裁剪前）；持续 >`grad_clip` 说明更新量偏大 |
 | comm/beta | 当前 β |
 | train/reward_scale | `reward_norm` 的缩放系数；`RunningStd.scale(min_std=1.0)` 只缩小不放大，本任务的每步奖励 std < 1 → 实测恒为 1.0（即该归一化对负奖励无效） |
 | train/value_scale | `value_norm` 的价值目标缩放系数（回合回报 std 的倒数，O(1) 量级） |
