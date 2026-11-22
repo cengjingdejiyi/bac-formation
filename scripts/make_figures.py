@@ -227,6 +227,31 @@ def _style() -> dict:
     return {"marker": "o", "ms": 3, "lw": 1.4}
 
 
+def _k_steps(ax) -> None:
+    """横轴按「千步」显示：200k 步的刻度写成 200k，避免 100000 125000 挤成一片。"""
+    from matplotlib.ticker import FuncFormatter
+
+    ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _pos: f"{v / 1000:g}k"))
+
+
+def _data_title(metrics: dict, robust: dict, kind: str) -> str:
+    """标题按实际读到的 run 组数与 seed 数生成，不写死方法数。
+
+    本机只跑到某几个方法时（例如只有 E 的 ippo/qmix），写死 "6 methods" 会与图不符；
+    汇总机合并 18 run 后自动变成 6 组 × 3 seed。
+    """
+    labels = set(metrics["series"]) | set(robust["series"])
+    n_groups = len(labels)
+    n_seeds = 0
+    for src in (metrics, robust):
+        for lb in src["series"]:
+            n_seeds = max(n_seeds, len(src["seeds"].get(lb, ()) or ()))
+    head = f"{n_groups} run group{'s' if n_groups != 1 else ''}"
+    if n_seeds:
+        head += f" × {n_seeds} seed{'s' if n_seeds != 1 else ''}"
+    return f"{head}: {kind} (mean ± std over seeds)"
+
+
 def fig_train_eval(metrics: dict, plt, out: Path, dpi: int, titles: dict) -> Path | None:
     """2×2：return / success_rate / formation_err / collisions，train 实线 + eval 虚线。"""
     if not metrics["series"]:
@@ -262,6 +287,7 @@ def fig_train_eval(metrics: dict, plt, out: Path, dpi: int, titles: dict) -> Pat
                     names.append(name)
         ax.set_title(f"{key} (train vs eval)")
         ax.set_xlabel("env_steps")
+        _k_steps(ax)
         ax.grid(alpha=0.3)
     fig.suptitle(titles["main"])
     fig.tight_layout(rect=(0, 0.07, 1, 0.95))
@@ -305,6 +331,7 @@ def fig_comm(metrics: dict, plt, out: Path, dpi: int, titles: dict) -> Path | No
                 made = True
         ax.set_title(f"{key} (comm budget)")
         ax.set_xlabel("env_steps")
+        _k_steps(ax)
         ax.grid(alpha=0.3)
     axes.ravel()[0].legend(fontsize=7)
     fig.suptitle(titles["comm"])
@@ -370,6 +397,7 @@ def fig_return(metrics: dict, plt, out: Path, dpi: int, titles: dict) -> Path | 
     ax.set_xlabel("env_steps")
     ax.set_ylabel("return")
     ax.set_title(titles["main"])
+    _k_steps(ax)
     ax.legend(fontsize=8)
     ax.grid(alpha=0.3)
     fig.tight_layout()
@@ -413,9 +441,9 @@ def main(argv: list[str] | None = None) -> int:
 
     out.mkdir(parents=True, exist_ok=True)
     titles = {
-        "main": "6 methods × 3 seeds: train vs eval (mean ± std over seeds)",
-        "comm": "6 methods × 3 seeds: communication budget (mean ± std over seeds)",
-        "robust": "6 methods × 3 seeds: robustness vs packet drop (mean ± std over seeds)",
+        "main": _data_title(metrics, robust, "train vs eval"),
+        "comm": _data_title(metrics, robust, "communication budget"),
+        "robust": _data_title(metrics, robust, "robustness vs packet drop"),
     }
     made = [
         fig_train_eval(metrics, plt, out, args.dpi, titles),
